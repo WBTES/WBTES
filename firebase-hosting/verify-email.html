@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="light dark">
+    <title>Verify Email | WBTE</title>
+    <link rel="stylesheet" href="/verification.css">
+  </head>
+  <body>
+    <main class="page-shell">
+      <section class="verification-panel" aria-labelledby="page-title">
+        <header class="brand">
+          <span class="brand-mark" aria-hidden="true">W</span>
+          <span>
+            <strong>WBTE</strong>
+            <small>Web-Based Teacher Evaluation</small>
+          </span>
+        </header>
+
+        <div id="status-symbol" class="status-symbol status-symbol-neutral" aria-hidden="true">
+          <span>@</span>
+        </div>
+        <p id="eyebrow" class="eyebrow">Secure email confirmation</p>
+        <h1 id="page-title">Verify your email address</h1>
+        <p id="message" class="message">
+          Confirm that you requested this WBTE account before continuing.
+        </p>
+
+        <button id="verify-button" class="primary-action" type="button">
+          Verify email
+        </button>
+        <a id="continue-link" class="primary-action hidden" href="#">
+          Continue to WBTE
+        </a>
+        <p id="supporting-note" class="supporting-note">
+          Student dashboard access begins after email verification.
+        </p>
+      </section>
+      <p class="security-note">This verification page is securely hosted by Firebase.</p>
+    </main>
+
+    <script type="module" src="/verify-email.js"></script>
+  </body>
+</html>
