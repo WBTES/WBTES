@@ -37,6 +37,8 @@ export default function StudentEvaluationsPage() {
   const [periods, setPeriods] = React.useState<Record<string, EvaluationPeriod>>({});
   const [selected, setSelected] = React.useState<Set<string>>(new Set());
   const [search, setSearch] = React.useState("");
+  const [teacherFilter, setTeacherFilter] = React.useState("");
+  const [subjectFilter, setSubjectFilter] = React.useState("");
   const [loading, setLoading] = React.useState(true);
 
   React.useEffect(() => {
@@ -68,7 +70,7 @@ export default function StudentEvaluationsPage() {
           id: item.id,
           ...(item.data() as Omit<TeacherAssignment, "id">),
         }));
-        setAssignments(uniqueTeacherPeriods(assignmentList));
+        setAssignments(assignmentList);
         setTeachers(toRecord<Teacher>(teacherSnapshot.docs));
         setSubjects(toRecord<Subject>(subjectSnapshot.docs));
         setDepartments(toRecord<Department>(departmentSnapshot.docs));
@@ -77,7 +79,7 @@ export default function StudentEvaluationsPage() {
         const keys = new Set<string>();
         completionSnapshot.docs.forEach((item) => {
           const completion = item.data() as EvaluationCompletion;
-          keys.add(completionKey(completion.teacherId, completion.periodId));
+          if (completion.assignmentId) keys.add(completion.assignmentId);
         });
         setCompletionKeys(keys);
       } catch (error) {
@@ -90,8 +92,9 @@ export default function StudentEvaluationsPage() {
 
   const visibleAssignments = React.useMemo(() => {
     const needle = search.trim().toLowerCase();
-    if (!needle) return assignments;
     return assignments.filter((assignment) => {
+      if (teacherFilter && assignment.teacherId !== teacherFilter) return false;
+      if (subjectFilter && assignment.subjectId !== subjectFilter) return false;
       const values = [
         teachers[assignment.teacherId]?.displayName,
         subjects[assignment.subjectId]?.name,
@@ -100,9 +103,24 @@ export default function StudentEvaluationsPage() {
         departments[assignment.departmentId]?.code,
         periods[assignment.periodId]?.name,
       ];
-      return values.some((value) => value?.toLowerCase().includes(needle));
+      return !needle || values.some((value) => value?.toLowerCase().includes(needle));
     });
-  }, [assignments, departments, periods, search, subjects, teachers]);
+  }, [assignments, departments, periods, search, subjectFilter, subjects, teacherFilter, teachers]);
+
+  const assignedTeacherIds = React.useMemo(
+    () => [...new Set(assignments.map((assignment) => assignment.teacherId))],
+    [assignments]
+  );
+  const assignedSubjectIds = React.useMemo(
+    () => [...new Set(assignments
+      .filter((assignment) => !teacherFilter || assignment.teacherId === teacherFilter)
+      .map((assignment) => assignment.subjectId))],
+    [assignments, teacherFilter]
+  );
+
+  React.useEffect(() => {
+    if (subjectFilter && !assignedSubjectIds.includes(subjectFilter)) setSubjectFilter("");
+  }, [assignedSubjectIds, subjectFilter]);
 
   const grouped = React.useMemo(() => {
     const result = {
@@ -112,8 +130,7 @@ export default function StudentEvaluationsPage() {
       expired: [] as TeacherAssignment[],
     };
     visibleAssignments.forEach((assignment) => {
-      const key = completionKey(assignment.teacherId, assignment.periodId);
-      if (completionKeys.has(key)) {
+      if (completionKeys.has(assignment.id)) {
         result.completed.push(assignment);
         return;
       }
@@ -159,7 +176,7 @@ export default function StudentEvaluationsPage() {
     <div>
       <PageHeader
         title="My Evaluations"
-        description="Search assigned teachers, select one or more, and submit one anonymous response per teacher and period."
+        description="Search assigned teachers and subjects, then submit one anonymous response for each assignment."
         action={
           grouped.pending.length > 0 ? (
             <button
@@ -175,14 +192,24 @@ export default function StudentEvaluationsPage() {
         }
       />
 
-      <div className="relative mb-6">
-        <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-        <input
-          value={search}
-          onChange={(event) => setSearch(event.target.value)}
-          placeholder="Search teacher, subject, department, or period"
-          className="w-full rounded-lg border border-slate-200 bg-white py-2.5 pl-10 pr-4 text-sm outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-500/20 dark:border-slate-800 dark:bg-slate-900"
-        />
+      <div className="mb-6 grid gap-3 md:grid-cols-[minmax(0,1fr)_220px_220px]">
+        <div className="relative">
+          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+          <input
+            value={search}
+            onChange={(event) => setSearch(event.target.value)}
+            placeholder="Search teacher, subject, department, or period"
+            className="w-full rounded-lg border border-slate-200 bg-white py-2.5 pl-10 pr-4 text-sm outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-500/20 dark:border-slate-800 dark:bg-slate-900"
+          />
+        </div>
+        <select value={teacherFilter} onChange={(event) => setTeacherFilter(event.target.value)} className="rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-sm dark:border-slate-800 dark:bg-slate-900">
+          <option value="">All assigned teachers</option>
+          {assignedTeacherIds.map((id) => <option key={id} value={id}>{teachers[id]?.displayName ?? "Teacher"}</option>)}
+        </select>
+        <select value={subjectFilter} onChange={(event) => setSubjectFilter(event.target.value)} className="rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-sm dark:border-slate-800 dark:bg-slate-900">
+          <option value="">All assigned subjects</option>
+          {assignedSubjectIds.map((id) => <option key={id} value={id}>{subjects[id]?.code ?? "Subject"} - {subjects[id]?.name ?? ""}</option>)}
+        </select>
       </div>
 
       {loading ? (
@@ -382,20 +409,6 @@ function EmptyState({ message }: { message: string }) {
       {message}
     </div>
   );
-}
-
-function completionKey(teacherId: string, periodId: string) {
-  return `${teacherId}_${periodId}`;
-}
-
-function uniqueTeacherPeriods(assignments: TeacherAssignment[]) {
-  const seen = new Set<string>();
-  return assignments.filter((assignment) => {
-    const key = completionKey(assignment.teacherId, assignment.periodId);
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
 }
 
 function toRecord<T extends { id: string }>(

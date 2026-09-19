@@ -71,7 +71,7 @@ export default function EvaluatePage() {
         setQuestions(qs);
         if (eSnap.docs.some((item) => {
           const completion = item.data();
-          return completion.teacherId === a.teacherId && completion.periodId === a.periodId;
+          return completion.assignmentId === a.id;
         })) {
           setDone(true);
         }
@@ -165,7 +165,7 @@ export default function EvaluatePage() {
         </div>
         <h2 className="mt-4 text-2xl font-bold text-slate-900 dark:text-white">All done!</h2>
         <p className="mt-2 text-sm text-slate-600 dark:text-slate-400">
-          You&apos;ve already submitted an evaluation for {teacher.displayName}. Thanks for your feedback.
+          You&apos;ve already submitted the {subject.name} evaluation for {teacher.displayName}. Thanks for your feedback.
         </p>
         <Link href="/student/evaluations" className="btn-primary mt-6">Back to evaluations</Link>
       </div>

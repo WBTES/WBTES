@@ -32,6 +32,7 @@ import type {
   Evaluation,
   EvaluationCompletion,
   EvaluationPeriod,
+  Subject,
   Teacher,
   TeacherAssignment,
 } from "@/lib/types";
@@ -66,6 +67,13 @@ const emptyData: AnalyticsData = {
 
 export default function AdminAnalyticsPage() {
   const [data, setData] = React.useState<AnalyticsData>(emptyData);
+  const [evaluations, setEvaluations] = React.useState<Evaluation[]>([]);
+  const [completions, setCompletions] = React.useState<EvaluationCompletion[]>([]);
+  const [assignments, setAssignments] = React.useState<TeacherAssignment[]>([]);
+  const [teachers, setTeachers] = React.useState<Teacher[]>([]);
+  const [subjects, setSubjects] = React.useState<Subject[]>([]);
+  const [teacherId, setTeacherId] = React.useState("");
+  const [subjectId, setSubjectId] = React.useState("");
   const [loading, setLoading] = React.useState(true);
 
   React.useEffect(() => {
@@ -76,6 +84,7 @@ export default function AdminAnalyticsPage() {
           completionSnapshot,
           assignmentSnapshot,
           teacherSnapshot,
+          subjectSnapshot,
           departmentSnapshot,
           periodSnapshot,
           userSnapshot,
@@ -84,6 +93,7 @@ export default function AdminAnalyticsPage() {
           getDocs(collection(db, "evaluationCompletions")),
           getDocs(collection(db, "teacherAssignments")),
           getDocs(collection(db, "teachers")),
+          getDocs(collection(db, "subjects")),
           getDocs(collection(db, "departments")),
           getDocs(collection(db, "evaluationPeriods")),
           getDocs(collection(db, "users")),
@@ -100,9 +110,13 @@ export default function AdminAnalyticsPage() {
           id: item.id,
           ...(item.data() as Omit<TeacherAssignment, "id">),
         }));
-        const teachers = teacherSnapshot.docs.map((item) => ({
+        const teacherList = teacherSnapshot.docs.map((item) => ({
           id: item.id,
           ...(item.data() as Omit<Teacher, "id">),
+        }));
+        const subjectList = subjectSnapshot.docs.map((item) => ({
+          id: item.id,
+          ...(item.data() as Omit<Subject, "id">),
         }));
         const departments = departmentSnapshot.docs.map((item) => ({
           id: item.id,
@@ -119,11 +133,16 @@ export default function AdminAnalyticsPage() {
             && (user.status ?? "active") === "active"
           );
 
+        setEvaluations(evaluations);
+        setCompletions(completions);
+        setAssignments(assignments);
+        setTeachers(teacherList);
+        setSubjects(subjectList);
         setData(buildAnalytics({
           evaluations,
           completions,
           assignments,
-          teachers,
+          teachers: teacherList,
           departments,
           periods,
           students,
@@ -133,6 +152,55 @@ export default function AdminAnalyticsPage() {
       }
     })();
   }, []);
+
+  const teacherSubjects = React.useMemo(() => {
+    const ids = new Set(assignments
+      .filter((assignment) => !teacherId || assignment.teacherId === teacherId)
+      .map((assignment) => assignment.subjectId));
+    return subjects.filter((subject) => ids.has(subject.id));
+  }, [assignments, subjects, teacherId]);
+
+  React.useEffect(() => {
+    if (subjectId && !teacherSubjects.some((subject) => subject.id === subjectId)) {
+      setSubjectId("");
+    }
+  }, [subjectId, teacherSubjects]);
+
+  const selection = React.useMemo(() => {
+    const selectedAssignments = assignments.filter((assignment) =>
+      (!teacherId || assignment.teacherId === teacherId)
+      && (!subjectId || assignment.subjectId === subjectId)
+    );
+    const assignmentIds = new Set(selectedAssignments.map((assignment) => assignment.id));
+    const slots = new Set(selectedAssignments.flatMap((assignment) =>
+      assignment.studentIds.map((studentId) => `${studentId}_${assignment.id}`)
+    ));
+    const selectedCompletions = completions.filter((completion) =>
+      assignmentIds.has(completion.assignmentId)
+    );
+    const selectedEvaluations = evaluations.filter((evaluation) =>
+      (!teacherId || evaluation.teacherId === teacherId)
+      && (!subjectId || evaluation.subjectId === subjectId)
+    );
+    const distribution = [1, 2, 3, 4, 5].map((rating) => ({
+      rating: `${rating} star${rating === 1 ? "" : "s"}`,
+      students: selectedEvaluations.filter((evaluation) =>
+        Math.max(1, Math.min(5, Math.round(evaluation.averageScore))) === rating
+      ).length,
+    }));
+    const completed = new Set(selectedCompletions.map((completion) =>
+      `${completion.studentId}_${completion.assignmentId}`
+    )).size;
+    return {
+      assigned: slots.size,
+      completed,
+      pending: Math.max(slots.size - completed, 0),
+      average: selectedEvaluations.length
+        ? selectedEvaluations.reduce((sum, evaluation) => sum + evaluation.averageScore, 0) / selectedEvaluations.length
+        : 0,
+      distribution,
+    };
+  }, [assignments, completions, evaluations, subjectId, teacherId]);
 
   const completionRate = data.completedStudents + data.pendingStudents > 0
     ? Math.round(
@@ -155,6 +223,46 @@ export default function AdminAnalyticsPage() {
         <Metric label="Students pending" value={loading ? "..." : data.pendingStudents} icon={Clock3} tone="amber" />
         <Metric label="Completion rate" value={loading ? "..." : `${completionRate}%`} icon={Users} />
       </div>
+
+      <section className="mt-4 rounded-lg border border-slate-200 bg-white p-5 dark:border-slate-800 dark:bg-slate-900">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+          <div>
+            <h2 className="font-semibold">Teacher and subject completion</h2>
+            <p className="mt-1 text-sm text-slate-500">Each bar represents a student&apos;s rounded overall evaluation score.</p>
+          </div>
+          <div className="grid gap-3 sm:grid-cols-2 lg:w-[560px]">
+            <label className="text-xs font-medium text-slate-500">Teacher
+              <select value={teacherId} onChange={(event) => setTeacherId(event.target.value)} className="mt-1 block w-full rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-950 dark:text-white">
+                <option value="">All teachers</option>
+                {teachers.map((teacher) => <option key={teacher.id} value={teacher.id}>{teacher.displayName}</option>)}
+              </select>
+            </label>
+            <label className="text-xs font-medium text-slate-500">Subject
+              <select value={subjectId} onChange={(event) => setSubjectId(event.target.value)} className="mt-1 block w-full rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-950 dark:text-white">
+                <option value="">All assigned subjects</option>
+                {teacherSubjects.map((subject) => <option key={subject.id} value={subject.id}>{subject.code} - {subject.name}</option>)}
+              </select>
+            </label>
+          </div>
+        </div>
+        <div className="mt-5 grid gap-3 sm:grid-cols-4">
+          <SelectionMetric label="Assigned" value={selection.assigned} />
+          <SelectionMetric label="Completed" value={selection.completed} tone="green" />
+          <SelectionMetric label="Pending" value={selection.pending} tone="amber" />
+          <SelectionMetric label="Average rating" value={selection.completed ? selection.average.toFixed(2) : "—"} />
+        </div>
+        <div className="mt-5 h-[300px]">
+          <ResponsiveContainer width="100%" height="100%">
+            <BarChart data={selection.distribution} margin={{ top: 8, right: 8, left: 0, bottom: 8 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="rgba(148,163,184,0.22)" />
+              <XAxis dataKey="rating" tick={{ fontSize: 12 }} />
+              <YAxis allowDecimals={false} tick={{ fontSize: 12 }} />
+              <Tooltip cursor={false} contentStyle={tooltipStyle} />
+              <Bar dataKey="students" name="Students" fill="#2563eb" radius={[6, 6, 0, 0]} />
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+      </section>
 
       <div className="mt-4 grid gap-4 lg:grid-cols-2">
         <ChartPanel title="Average rating by department">
@@ -275,7 +383,7 @@ function buildAnalytics(input: {
   const slotMap = new Map<string, { studentId: string; departmentId: string; completed: boolean }>();
   input.assignments.forEach((assignment) => {
     assignment.studentIds.forEach((studentId) => {
-      const key = `${studentId}_${assignment.teacherId}_${assignment.periodId}`;
+      const key = `${studentId}_${assignment.id}`;
       if (!slotMap.has(key)) {
         slotMap.set(key, {
           studentId,
@@ -286,7 +394,7 @@ function buildAnalytics(input: {
     });
   });
   input.completions.forEach((completion) => {
-    const key = `${completion.studentId}_${completion.teacherId}_${completion.periodId}`;
+    const key = `${completion.studentId}_${completion.assignmentId}`;
     const slot = slotMap.get(key);
     if (slot) slot.completed = true;
   });
@@ -387,6 +495,20 @@ function Metric({
         <div className={`flex h-9 w-9 items-center justify-center rounded-lg ${colors[tone]}`}><Icon className="h-4 w-4" /></div>
       </div>
       <p className="mt-3 text-2xl font-bold">{value}</p>
+    </div>
+  );
+}
+
+function SelectionMetric({ label, value, tone = "blue" }: { label: string; value: React.ReactNode; tone?: "blue" | "green" | "amber" }) {
+  const colors = {
+    blue: "text-brand-700 dark:text-brand-300",
+    green: "text-emerald-700 dark:text-emerald-300",
+    amber: "text-amber-700 dark:text-amber-300",
+  };
+  return (
+    <div className="rounded-lg bg-slate-50 px-4 py-3 dark:bg-slate-800/70">
+      <p className="text-xs text-slate-500">{label}</p>
+      <p className={`mt-1 text-2xl font-bold ${colors[tone]}`}>{value}</p>
     </div>
   );
 }

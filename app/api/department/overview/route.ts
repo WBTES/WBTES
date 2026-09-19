@@ -63,7 +63,7 @@ export async function GET(request: Request) {
       const teacher = progress.get(assignment.teacherId);
       if (!teacher || !Array.isArray(assignment.studentIds)) return;
       assignment.studentIds.forEach((studentId) => {
-        teacher.assigned.add(`${studentId}_${assignment.teacherId}_${assignment.periodId}`);
+        teacher.assigned.add(`${studentId}_${document.id}`);
       });
     });
 
@@ -71,7 +71,7 @@ export async function GET(request: Request) {
       const completion = document.data() as EvaluationCompletion;
       if (!openPeriodIds.has(completion.periodId)) return;
       const teacher = progress.get(completion.teacherId);
-      const key = `${completion.studentId}_${completion.teacherId}_${completion.periodId}`;
+      const key = `${completion.studentId}_${completion.assignmentId}`;
       if (teacher?.assigned.has(key)) teacher.submitted.add(key);
     });
 

@@ -209,6 +209,7 @@ export interface RatingAnswers {
 
 export interface Evaluation {
   id: string;
+  assignmentId?: string;
   teacherId: string;
   subjectId: string;
   departmentId: string;

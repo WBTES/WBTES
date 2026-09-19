@@ -8,7 +8,7 @@ import { db, firebaseReady } from "@/lib/firebase/client";
 import { usePrograms } from "@/lib/use-programs";
 import { recordActivity } from "@/lib/authenticated-fetch";
 import { PageHeader, Modal, FormField, inputCls } from "@/components/data-table";
-import type { AppUser, Subject, Department, EvaluationPeriod, TeacherAssignment, Teacher } from "@/lib/types";
+import type { AppUser, Subject, Department, EvaluationCompletion, EvaluationPeriod, TeacherAssignment, Teacher } from "@/lib/types";
 import toast from "react-hot-toast";
 import { fmtDate } from "@/lib/utils-extras";
 
@@ -35,6 +35,7 @@ export default function AdminAssignmentsPage() {
   const [bulkPeriodId, setBulkPeriodId] = React.useState("");
   const [bulkTeacherIds, setBulkTeacherIds] = React.useState<Set<string>>(new Set());
   const [bulkSubjectIds, setBulkSubjectIds] = React.useState<Record<string, string>>({});
+  const [completionCounts, setCompletionCounts] = React.useState<Record<string, number>>({});
 
   React.useEffect(() => {
     if (!firebaseReady) return;
@@ -56,6 +57,14 @@ export default function AdminAssignmentsPage() {
     }));
     unsubs.push(onSnapshot(collection(db, "evaluationPeriods"), (snap) => {
       setPeriods(snap.docs.map((d) => ({ id: d.id, ...(d.data() as Omit<EvaluationPeriod, "id">) })));
+    }));
+    unsubs.push(onSnapshot(collection(db, "evaluationCompletions"), (snap) => {
+      const counts: Record<string, number> = {};
+      snap.docs.forEach((item) => {
+        const completion = item.data() as EvaluationCompletion;
+        if (completion.assignmentId) counts[completion.assignmentId] = (counts[completion.assignmentId] ?? 0) + 1;
+      });
+      setCompletionCounts(counts);
     }));
     return () => unsubs.forEach((u) => u());
   }, []);
@@ -116,7 +125,9 @@ export default function AdminAssignmentsPage() {
       const subjectId = bulkSubjectIds[teacher.id] ?? teacherSubjects[0]?.id ?? "";
       const studentIds = subjectId ? suggestedStudentIds(teacher.id, subjectId) : [];
       const duplicate = assigns.some((assignment) =>
-        assignment.teacherId === teacher.id && assignment.periodId === bulkPeriodId
+        assignment.teacherId === teacher.id
+        && assignment.subjectId === subjectId
+        && assignment.periodId === bulkPeriodId
       );
       const available = Boolean(bulkPeriodId && subjectId && studentIds.length > 0 && !duplicate);
       const unavailableReason = duplicate
@@ -232,10 +243,11 @@ export default function AdminAssignmentsPage() {
         assignment.id !== editingAssignment?.id
         &&
         assignment.teacherId === form.teacherId
+        && assignment.subjectId === form.subjectId
         && assignment.periodId === form.periodId
       );
       if (duplicate) {
-        throw new Error("This teacher already has an assignment in this evaluation period");
+        throw new Error("This teacher and subject already have an assignment in this evaluation period");
       }
       const payload = {
         teacherId: form.teacherId,
@@ -426,7 +438,7 @@ export default function AdminAssignmentsPage() {
                 <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">Teacher</th>
                 <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">Subject</th>
                 <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">Period</th>
-                <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">Students</th>
+                <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">Student progress</th>
                 <th className="px-4 py-3 text-right text-xs font-semibold uppercase tracking-wider text-slate-500">Actions</th>
               </tr>
             </thead>
@@ -443,7 +455,11 @@ export default function AdminAssignmentsPage() {
                     <td className="px-4 py-3 font-medium">{teachers.find((t) => t.id === a.teacherId)?.displayName ?? a.teacherId}</td>
                     <td className="px-4 py-3">{subjects.find((s) => s.id === a.subjectId)?.name ?? a.subjectId}</td>
                     <td className="px-4 py-3 text-slate-600 dark:text-slate-400">{periods.find((p) => p.id === a.periodId)?.name ?? a.periodId}</td>
-                    <td className="px-4 py-3 text-slate-600 dark:text-slate-400">{a.studentIds.length}</td>
+                    <td className="px-4 py-3 text-slate-600 dark:text-slate-400">
+                      <span className="font-medium text-slate-900 dark:text-white">{a.studentIds.length} assigned</span>
+                      <span className="ml-2 text-emerald-600 dark:text-emerald-400">{completionCounts[a.id] ?? 0} completed</span>
+                      <span className="ml-2 text-amber-600 dark:text-amber-400">{Math.max(a.studentIds.length - (completionCounts[a.id] ?? 0), 0)} pending</span>
+                    </td>
                     <td className="px-4 py-3 text-right">
                       <button
                         onClick={() => void openEdit(a)}

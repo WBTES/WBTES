@@ -115,10 +115,9 @@ export default function AdminProgressPage() {
             id: item.id,
             ...(item.data() as Omit<EvaluationCompletion, "id">),
           };
-          completionMap.set(
-            `${completion.studentId}_${completion.teacherId}_${completion.periodId}`,
-            completion
-          );
+          if (completion.assignmentId) {
+            completionMap.set(`${completion.studentId}_${completion.assignmentId}`, completion);
+          }
         });
 
         const output = new Map<string, ProgressRow>();
@@ -131,7 +130,7 @@ export default function AdminProgressPage() {
           assignment.studentIds.forEach((studentId) => {
             const student = studentMap.get(studentId);
             if (!student || !period) return;
-            const id = `${studentId}_${assignment.teacherId}_${assignment.periodId}`;
+            const id = `${studentId}_${assignment.id}`;
             if (output.has(id)) return;
             const completion = completionMap.get(id);
             output.set(id, {

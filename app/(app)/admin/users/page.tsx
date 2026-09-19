@@ -766,12 +766,7 @@ function StudentProfileModal({
         )),
       ]);
       const completionRows = completions.docs.map((item) => item.data() as EvaluationCompletion);
-      const uniqueAssignments = new Set(
-        assignments.docs.map((item) => {
-          const assignment = item.data() as TeacherAssignment;
-          return `${assignment.teacherId}_${assignment.periodId}`;
-        })
-      );
+      const uniqueAssignments = new Set(assignments.docs.map((item) => item.id));
       setProgress({
         assigned: uniqueAssignments.size,
         completed: completionRows.length,

@@ -92,7 +92,7 @@ async function countOverdueEvaluations(periodIds: string[]) {
       const assignment = document.data() as TeacherAssignment;
       assignment.studentIds?.forEach((studentId) => {
         pending.add(
-          `${studentId}_${assignment.teacherId}_${assignment.periodId}`
+          `${studentId}_${document.id}`
         );
       });
     });
@@ -101,7 +101,7 @@ async function countOverdueEvaluations(periodIds: string[]) {
     completions.docs.forEach((document) => {
       const completion = document.data() as EvaluationCompletion;
       pending.delete(
-        `${completion.studentId}_${completion.teacherId}_${completion.periodId}`
+        `${completion.studentId}_${completion.assignmentId}`
       );
     });
   });

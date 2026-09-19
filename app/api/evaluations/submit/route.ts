@@ -96,24 +96,34 @@ export async function POST(request: Request) {
       throw new ApiError(400, "Answer at least one scored evaluation question.");
     }
 
-    const completionId = `${decoded.uid}_${assignment.teacherId}_${assignment.periodId}`;
+    const completionId = `${decoded.uid}_${assignment.id}`;
     const completionRef = adminDb
       .collection("evaluationCompletions")
       .doc(completionId);
+    const legacyCompletionRef = adminDb
+      .collection("evaluationCompletions")
+      .doc(`${decoded.uid}_${assignment.teacherId}_${assignment.periodId}`);
     const evaluationRef = adminDb.collection("evaluations").doc();
     const program = programSnapshot?.exists
       ? (programSnapshot.data() as Omit<Program, "id">)
       : null;
 
     await adminDb.runTransaction(async (transaction) => {
-      const existing = await transaction.get(completionRef);
-      if (existing.exists) {
+      const [existing, legacyCompletion] = await Promise.all([
+        transaction.get(completionRef),
+        transaction.get(legacyCompletionRef),
+      ]);
+      if (
+        existing.exists
+        || (legacyCompletion.exists && legacyCompletion.data()?.assignmentId === assignment.id)
+      ) {
         throw new ApiError(
           409,
-          "You already evaluated this teacher during this evaluation period."
+          "You already submitted this teacher and subject evaluation."
         );
       }
       transaction.create(evaluationRef, {
+        assignmentId: assignment.id,
         teacherId: assignment.teacherId,
         subjectId: assignment.subjectId,
         departmentId: assignment.departmentId,

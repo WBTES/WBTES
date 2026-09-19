@@ -77,7 +77,7 @@ export default function DashboardOverview() {
             const data = d.data() as TeacherAssignment;
             if (!Array.isArray(data.studentIds)) return;
             data.studentIds.forEach((studentId) => {
-              const key = `${studentId}_${data.teacherId}_${data.periodId}`;
+              const key = `${studentId}_${d.id}`;
               if (!slots.has(key)) {
                 slots.set(key, { studentId, completed: false });
               }
@@ -86,7 +86,7 @@ export default function DashboardOverview() {
           completionSnap.forEach((d) => {
             const completion = d.data() as EvaluationCompletion;
             const slot = slots.get(
-              `${completion.studentId}_${completion.teacherId}_${completion.periodId}`
+              `${completion.studentId}_${completion.assignmentId}`
             );
             if (slot) slot.completed = true;
           });
@@ -141,18 +141,10 @@ export default function DashboardOverview() {
           id: item.id,
           ...(item.data() as Omit<EvaluationPeriod, "id">),
         }));
-        const completedTeacherPeriods = new Set(completions.map((completion) =>
-          `${completion.teacherId}_${completion.periodId}`
-        ));
-        const uniqueAssignments = assignments.filter((assignment, index, list) =>
-          list.findIndex((item) =>
-            item.teacherId === assignment.teacherId
-            && item.periodId === assignment.periodId
-          ) === index
-        );
-        const openAssignments = uniqueAssignments.filter((assignment) => periods.get(assignment.periodId)?.status === "open");
+        const completedAssignmentIds = new Set(completions.map((completion) => completion.assignmentId));
+        const openAssignments = assignments.filter((assignment) => periods.get(assignment.periodId)?.status === "open");
         const pendingAssignments = openAssignments.filter((assignment) =>
-          !completedTeacherPeriods.has(`${assignment.teacherId}_${assignment.periodId}`)
+          !completedAssignmentIds.has(assignment.id)
         );
         const activePeriods = pendingAssignments
           .map((assignment) => periods.get(assignment.periodId))

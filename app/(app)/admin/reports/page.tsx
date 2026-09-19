@@ -511,7 +511,7 @@ function buildProgressRows(
       .map((student) => [student.claimedUid!, student])
   );
   const completionMap = new Map(completions.map((completion) => [
-    `${completion.studentId}_${completion.teacherId}_${completion.periodId}`,
+    `${completion.studentId}_${completion.assignmentId}`,
     completion,
   ]));
   const rows = new Map<string, ProgressRow>();
@@ -519,7 +519,7 @@ function buildProgressRows(
     assignment.studentIds.forEach((studentId) => {
       const student = studentMap.get(studentId);
       if (!student) return;
-      const id = `${studentId}_${assignment.teacherId}_${assignment.periodId}`;
+      const id = `${studentId}_${assignment.id}`;
       if (rows.has(id)) return;
       const completion = completionMap.get(id);
       rows.set(id, {
