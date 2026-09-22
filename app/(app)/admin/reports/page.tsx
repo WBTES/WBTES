@@ -34,6 +34,7 @@ import type {
   TeacherAssignment,
 } from "@/lib/types";
 import { fmtDateTime } from "@/lib/utils-extras";
+import { reportableEvaluations } from "@/lib/evaluation-results";
 import toast from "react-hot-toast";
 
 type ManagedStudent = StudentRegistry & {
@@ -161,13 +162,23 @@ export default function AdminReportsPage() {
         ...(item.data() as Omit<PerformanceReport, "id">),
       }));
 
-      setEvaluations(evaluationRows);
+      const finalEvaluationRows = reportableEvaluations(
+        evaluationRows,
+        assignmentRows,
+        completionRows
+      );
+      const finalReportKeys = new Set(finalEvaluationRows.map((evaluation) =>
+        `${evaluation.periodId}_${evaluation.teacherId}_${evaluation.subjectId}`
+      ));
+      setEvaluations(finalEvaluationRows);
       setTeachers(teacherRows);
       setDepartments(departmentRows);
       setPrograms(programRows);
       setSubjects(subjectRows);
       setPeriods(periodRows);
-      setPerformanceReports(performanceRows);
+      setPerformanceReports(performanceRows.filter((report) =>
+        finalReportKeys.has(`${report.periodId}_${report.teacherId}_${report.subjectId}`)
+      ));
       setProgress(buildProgressRows(
         studentData.registrations,
         assignmentRows,

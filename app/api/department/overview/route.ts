@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { adminDb } from "@/lib/firebase/admin";
 import { apiErrorResponse } from "@/lib/server/api-response";
 import { requireDepartmentStaff } from "@/lib/server/require-admin";
+import { reportableEvaluations } from "@/lib/evaluation-results";
 import type {
   DepartmentOverview,
   Evaluation,
@@ -75,8 +76,19 @@ export async function GET(request: Request) {
       if (teacher?.assigned.has(key)) teacher.submitted.add(key);
     });
 
-    const releasedEvaluations = evaluationSnapshot.docs
-      .map((document) => document.data() as Evaluation)
+    const assignments = assignmentSnapshot.docs.map((document) => ({
+      id: document.id,
+      ...(document.data() as Omit<TeacherAssignment, "id">),
+    }));
+    const completions = completionSnapshot.docs.map((document) => ({
+      id: document.id,
+      ...(document.data() as Omit<EvaluationCompletion, "id">),
+    }));
+    const evaluations = evaluationSnapshot.docs.map((document) => ({
+      id: document.id,
+      ...(document.data() as Omit<Evaluation, "id">),
+    }));
+    const releasedEvaluations = reportableEvaluations(evaluations, assignments, completions)
       .filter((evaluation) => closedPeriodIds.has(evaluation.periodId));
     releasedEvaluations.forEach((evaluation) => {
       if (typeof evaluation.averageScore !== "number") return;

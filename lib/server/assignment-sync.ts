@@ -45,8 +45,7 @@ export async function synchronizeTeacherAssignments(teacherId: string) {
     const completedStudentIds = completionSnapshot.docs
       .map((item) => String(item.data().studentId ?? ""))
       .filter(Boolean);
-    const subjectIsAssigned = !teacher.subjectIds?.length
-      || teacher.subjectIds.includes(assignment.subjectId);
+    const subjectIsAssigned = teacher.subjectIds?.includes(assignment.subjectId) === true;
     const studentIds = [...new Set([
       ...(subjectIsAssigned ? eligibleStudentIds : []),
       ...completedStudentIds,
@@ -94,8 +93,7 @@ export async function synchronizeStudentAssignments(student: AppUser) {
     if (!isMutablePeriod(periods.get(assignment.periodId))) return;
     const teacher = teachers.get(assignment.teacherId);
     if (!teacher) return;
-    const subjectIsAssigned = !teacher.subjectIds?.length
-      || teacher.subjectIds.includes(assignment.subjectId);
+    const subjectIsAssigned = teacher.subjectIds?.includes(assignment.subjectId) === true;
     const eligible = subjectIsAssigned
       && studentMatchesTeacherScope(student, teacher, activeProgramIds);
     const studentIds = Array.isArray(assignment.studentIds) ? assignment.studentIds : [];

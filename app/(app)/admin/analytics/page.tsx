@@ -26,6 +26,7 @@ import {
 } from "recharts";
 import { db } from "@/lib/firebase/client";
 import { PageHeader } from "@/components/data-table";
+import { reportableEvaluations } from "@/lib/evaluation-results";
 import type {
   AppUser,
   Department,
@@ -166,6 +167,11 @@ export default function AdminAnalyticsPage() {
     }
   }, [subjectId, teacherSubjects]);
 
+  const finalEvaluations = React.useMemo(
+    () => reportableEvaluations(evaluations, assignments, completions),
+    [assignments, completions, evaluations]
+  );
+
   const selection = React.useMemo(() => {
     const selectedAssignments = assignments.filter((assignment) =>
       (!teacherId || assignment.teacherId === teacherId)
@@ -178,7 +184,7 @@ export default function AdminAnalyticsPage() {
     const selectedCompletions = completions.filter((completion) =>
       assignmentIds.has(completion.assignmentId)
     );
-    const selectedEvaluations = evaluations.filter((evaluation) =>
+    const selectedEvaluations = finalEvaluations.filter((evaluation) =>
       (!teacherId || evaluation.teacherId === teacherId)
       && (!subjectId || evaluation.subjectId === subjectId)
     );
@@ -188,19 +194,20 @@ export default function AdminAnalyticsPage() {
         Math.max(1, Math.min(5, Math.round(evaluation.averageScore))) === rating
       ).length,
     }));
-    const completed = new Set(selectedCompletions.map((completion) =>
-      `${completion.studentId}_${completion.assignmentId}`
-    )).size;
+    const completed = new Set(selectedCompletions
+      .map((completion) => `${completion.studentId}_${completion.assignmentId}`)
+      .filter((key) => slots.has(key))).size;
     return {
       assigned: slots.size,
       completed,
       pending: Math.max(slots.size - completed, 0),
+      ready: slots.size > 0 && completed === slots.size,
       average: selectedEvaluations.length
         ? selectedEvaluations.reduce((sum, evaluation) => sum + evaluation.averageScore, 0) / selectedEvaluations.length
         : 0,
       distribution,
     };
-  }, [assignments, completions, evaluations, subjectId, teacherId]);
+  }, [assignments, completions, finalEvaluations, subjectId, teacherId]);
 
   const completionRate = data.completedStudents + data.pendingStudents > 0
     ? Math.round(
@@ -249,8 +256,13 @@ export default function AdminAnalyticsPage() {
           <SelectionMetric label="Assigned" value={selection.assigned} />
           <SelectionMetric label="Completed" value={selection.completed} tone="green" />
           <SelectionMetric label="Pending" value={selection.pending} tone="amber" />
-          <SelectionMetric label="Average rating" value={selection.completed ? selection.average.toFixed(2) : "—"} />
+          <SelectionMetric label="Average rating" value={selection.ready ? selection.average.toFixed(2) : "Pending completion"} />
         </div>
+        {!selection.ready && selection.assigned > 0 && (
+          <p className="mt-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-500/20 dark:bg-amber-500/10 dark:text-amber-200">
+            Final ratings are hidden until all {selection.assigned} assigned student evaluations are completed. {selection.pending} still pending.
+          </p>
+        )}
         <div className="mt-5 h-[300px]">
           <ResponsiveContainer width="100%" height="100%">
             <BarChart data={selection.distribution} margin={{ top: 8, right: 8, left: 0, bottom: 8 }}>
@@ -362,10 +374,15 @@ function buildAnalytics(input: {
   periods: EvaluationPeriod[];
   students: AppUser[];
 }): AnalyticsData {
+  const finalEvaluations = reportableEvaluations(
+    input.evaluations,
+    input.assignments,
+    input.completions
+  );
   const departmentScores = new Map<string, { total: number; count: number }>();
   const teacherScores = new Map<string, { total: number; count: number }>();
   const periodScores = new Map<string, { total: number; count: number }>();
-  input.evaluations.forEach((evaluation) => {
+  finalEvaluations.forEach((evaluation) => {
     const department = departmentScores.get(evaluation.departmentId) ?? { total: 0, count: 0 };
     department.total += evaluation.averageScore;
     department.count += 1;
@@ -464,10 +481,10 @@ function buildAnalytics(input: {
     totalStudents: input.students.length,
     completedStudents,
     pendingStudents,
-    totalEvaluations: input.evaluations.length,
-    averageRating: input.evaluations.length
-      ? input.evaluations.reduce((sum, evaluation) => sum + evaluation.averageScore, 0)
-        / input.evaluations.length
+    totalEvaluations: finalEvaluations.length,
+    averageRating: finalEvaluations.length
+      ? finalEvaluations.reduce((sum, evaluation) => sum + evaluation.averageScore, 0)
+        / finalEvaluations.length
       : 0,
   };
 }

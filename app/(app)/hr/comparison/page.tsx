@@ -34,10 +34,10 @@ import { PageHeader } from "@/components/data-table";
 import type {
   DepartmentOverview,
   Evaluation,
+  EvaluationPeriod,
   Subject,
   Teacher,
 } from "@/lib/types";
-import { loadReleasedDepartmentResults } from "@/lib/firebase/department-results";
 
 type RatingPoint = { name: string; score: number };
 type NamedValue = { name: string; value: number };
@@ -75,13 +75,17 @@ export default function DeptComparisonPage() {
     setError("");
     setNoDept(false);
     try {
-      const [results, teacherSnapshot, subjectSnapshot, overviewResponse] = await Promise.all([
-        loadReleasedDepartmentResults(),
+      const [resultsResponse, teacherSnapshot, subjectSnapshot, overviewResponse] = await Promise.all([
+        authenticatedFetch("/api/department/comparison"),
         getDocs(collection(db, "teachers")),
         getDocs(collection(db, "subjects")),
         authenticatedFetch("/api/department/overview"),
       ]);
       const departmentOverview = await readApiResponse<DepartmentOverview>(overviewResponse);
+      const results = await readApiResponse<{
+        evaluations: Evaluation[];
+        periods: EvaluationPeriod[];
+      }>(resultsResponse);
       setOverview(departmentOverview);
 
       const teachers: Record<string, string> = {};

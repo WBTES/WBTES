@@ -89,7 +89,7 @@ export default function AdminAssignmentsPage() {
       || !subject
       || teacher.status === "inactive"
       || teacher.departmentId !== subject.departmentId
-      || (teacher.subjectIds?.length && !teacher.subjectIds.includes(subject.id))
+      || !teacher.subjectIds?.includes(subject.id)
     ) {
       return [];
     }
@@ -115,14 +115,20 @@ export default function AdminAssignmentsPage() {
 
   const eligibleSubjectsForTeacher = (teacher: Teacher) => subjects.filter((subject) =>
     subject.departmentId === teacher.departmentId
-    && (!teacher.subjectIds?.length || teacher.subjectIds.includes(subject.id))
+    && teacher.subjectIds?.includes(subject.id)
   );
+
+  const defaultSubjectId = (teacher?: Teacher) => {
+    if (!teacher) return "";
+    const teacherSubjects = eligibleSubjectsForTeacher(teacher);
+    return teacherSubjects.length === 1 ? teacherSubjects[0].id : "";
+  };
 
   const bulkRows = teachers
     .filter((teacher) => teacher.status !== "inactive")
     .map((teacher) => {
       const teacherSubjects = eligibleSubjectsForTeacher(teacher);
-      const subjectId = bulkSubjectIds[teacher.id] ?? teacherSubjects[0]?.id ?? "";
+      const subjectId = bulkSubjectIds[teacher.id] ?? defaultSubjectId(teacher);
       const studentIds = subjectId ? suggestedStudentIds(teacher.id, subjectId) : [];
       const duplicate = assigns.some((assignment) =>
         assignment.teacherId === teacher.id
@@ -134,6 +140,8 @@ export default function AdminAssignmentsPage() {
         ? "Already assigned"
         : teacherSubjects.length === 0
           ? "No assigned subject"
+          : !subjectId
+            ? "Select subject"
           : studentIds.length === 0
             ? "No eligible students"
             : "";
@@ -159,10 +167,7 @@ export default function AdminAssignmentsPage() {
   const openNew = () => {
     const teacherId = teachers.find((teacher) => teacher.status !== "inactive")?.id ?? "";
     const teacher = teachers.find((item) => item.id === teacherId);
-    const subjectId = subjects.find((subject) =>
-      subject.departmentId === teacher?.departmentId
-      && (!teacher?.subjectIds?.length || teacher.subjectIds.includes(subject.id))
-    )?.id ?? "";
+    const subjectId = defaultSubjectId(teacher);
     setEditingAssignment(null);
     setCompletedStudentIds(new Set());
     setForm({
@@ -202,7 +207,7 @@ export default function AdminAssignmentsPage() {
     const subjectIds = Object.fromEntries(
       teachers
         .filter((teacher) => teacher.status !== "inactive")
-        .map((teacher) => [teacher.id, eligibleSubjectsForTeacher(teacher)[0]?.id ?? ""])
+        .map((teacher) => [teacher.id, defaultSubjectId(teacher)])
     );
     setBulkPeriodId(assignablePeriods[0]?.id ?? "");
     setBulkSubjectIds(subjectIds);
@@ -220,7 +225,7 @@ export default function AdminAssignmentsPage() {
       if (!teacher || teacher.status === "inactive") throw new Error("Select an active teacher");
       if (
         teacher.departmentId !== subj.departmentId
-        || (teacher.subjectIds?.length && !teacher.subjectIds.includes(subj.id))
+        || !teacher.subjectIds?.includes(subj.id)
       ) {
         throw new Error("The selected subject is not assigned to this teacher");
       }
@@ -369,7 +374,7 @@ export default function AdminAssignmentsPage() {
   const selectedTeacher = teachers.find((teacher) => teacher.id === form.teacherId);
   const eligibleSubjects = subjects.filter((subject) =>
     subject.departmentId === selectedTeacher?.departmentId
-    && (!selectedTeacher?.subjectIds?.length || selectedTeacher.subjectIds.includes(subject.id))
+    && selectedTeacher?.subjectIds?.includes(subject.id)
   );
   const scopedStudents = eligibleStudents(form.teacherId, form.subjectId);
 
@@ -450,10 +455,25 @@ export default function AdminAssignmentsPage() {
                   </td>
                 </tr>
               ) : (
-                assigns.map((a) => (
+                assigns.map((a) => {
+                  const teacher = teachers.find((item) => item.id === a.teacherId);
+                  const subject = subjects.find((item) => item.id === a.subjectId);
+                  const subjectMatchesTeacher = Boolean(
+                    teacher && subject
+                    && teacher.departmentId === subject.departmentId
+                    && teacher.subjectIds?.includes(subject.id)
+                  );
+                  return (
                   <tr key={a.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/30">
-                    <td className="px-4 py-3 font-medium">{teachers.find((t) => t.id === a.teacherId)?.displayName ?? a.teacherId}</td>
-                    <td className="px-4 py-3">{subjects.find((s) => s.id === a.subjectId)?.name ?? a.subjectId}</td>
+                    <td className="px-4 py-3 font-medium">{teacher?.displayName ?? a.teacherId}</td>
+                    <td className="px-4 py-3">
+                      <span className="font-medium">{subject ? `${subject.code} - ${subject.name}` : a.subjectId}</span>
+                      {!subjectMatchesTeacher && (
+                        <span className="ml-2 inline-flex rounded bg-rose-500/10 px-1.5 py-0.5 text-xs font-semibold text-rose-600 dark:text-rose-300">
+                          Not assigned to teacher
+                        </span>
+                      )}
+                    </td>
                     <td className="px-4 py-3 text-slate-600 dark:text-slate-400">{periods.find((p) => p.id === a.periodId)?.name ?? a.periodId}</td>
                     <td className="px-4 py-3 text-slate-600 dark:text-slate-400">
                       <span className="font-medium text-slate-900 dark:text-white">{a.studentIds.length} assigned</span>
@@ -474,7 +494,8 @@ export default function AdminAssignmentsPage() {
                       </button>
                     </td>
                   </tr>
-                ))
+                  );
+                })
               )}
             </tbody>
           </table>
@@ -600,11 +621,16 @@ export default function AdminAssignmentsPage() {
                     >
                       {row.subjects.length === 0 ? (
                         <option value="">No subject</option>
-                      ) : row.subjects.map((subject) => (
-                        <option key={subject.id} value={subject.id}>
-                          {subject.code} - {subject.name}
-                        </option>
-                      ))}
+                      ) : (
+                        <>
+                          {row.subjects.length > 1 && <option value="">Select subject</option>}
+                          {row.subjects.map((subject) => (
+                            <option key={subject.id} value={subject.id}>
+                              {subject.code} - {subject.name}
+                            </option>
+                          ))}
+                        </>
+                      )}
                     </select>
 
                     <div className="sm:text-right">
@@ -665,10 +691,7 @@ export default function AdminAssignmentsPage() {
               onChange={(event) => {
                 const teacherId = event.target.value;
                 const teacher = teachers.find((item) => item.id === teacherId);
-                const subjectId = subjects.find((subject) =>
-                  subject.departmentId === teacher?.departmentId
-                  && (!teacher?.subjectIds?.length || teacher.subjectIds.includes(subject.id))
-                )?.id ?? "";
+                const subjectId = defaultSubjectId(teacher);
                 setForm({
                   ...form,
                   teacherId,
@@ -687,7 +710,7 @@ export default function AdminAssignmentsPage() {
           <FormField label="Subject">
             <select
               required
-              disabled={Boolean(editingAssignment)}
+              disabled={Boolean(editingAssignment && completedStudentIds.size > 0)}
               value={form.subjectId}
               onChange={(event) => {
                 const subjectId = event.target.value;

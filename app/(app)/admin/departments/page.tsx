@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { Plus } from "lucide-react";
+import { GitMerge, Plus } from "lucide-react";
 import { collection, onSnapshot, query, orderBy } from "firebase/firestore";
 import { db, firebaseReady } from "@/lib/firebase/client";
 import { DataTable, PageHeader, Modal, FormField, inputCls } from "@/components/data-table";
@@ -18,6 +18,10 @@ export default function AdminDepartmentsPage() {
   const [editing, setEditing] = React.useState<Department | null>(null);
   const [form, setForm] = React.useState({ name: "", code: "" });
   const [loading, setLoading] = React.useState(false);
+  const [mergeSource, setMergeSource] = React.useState<Department | null>(null);
+  const [mergeTargetId, setMergeTargetId] = React.useState("");
+  const [mergeConfirmation, setMergeConfirmation] = React.useState("");
+  const [merging, setMerging] = React.useState(false);
 
   React.useEffect(() => {
     if (!firebaseReady) return;
@@ -69,7 +73,37 @@ export default function AdminDepartmentsPage() {
       await readApiResponse<{ ok: true }>(response);
       toast.success("Department deleted");
     } catch (error: unknown) {
-      toast.error(error instanceof Error ? error.message : "Delete failed");
+      const message = error instanceof Error ? error.message : "Delete failed";
+      if (message.startsWith("Cannot delete this department while it is used by:")) {
+        setMergeSource(d);
+        setMergeTargetId(depts.find((department) => department.id !== d.id)?.id ?? "");
+        setMergeConfirmation("");
+        toast.error("This department is in use. Merge it into another department to preserve its records.");
+      } else {
+        toast.error(message);
+      }
+    }
+  };
+
+  const onMerge = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!mergeSource || !mergeTargetId || mergeConfirmation !== mergeSource.code) return;
+    setMerging(true);
+    try {
+      const response = await authenticatedFetch("/api/admin/departments", {
+        method: "PUT",
+        body: JSON.stringify({
+          sourceId: mergeSource.id,
+          targetId: mergeTargetId,
+        }),
+      });
+      const result = await readApiResponse<{ ok: true; migratedRecords: number }>(response);
+      toast.success(`Department merged. ${result.migratedRecords} linked record${result.migratedRecords === 1 ? "" : "s"} moved.`);
+      setMergeSource(null);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Department merge failed.");
+    } finally {
+      setMerging(false);
     }
   };
 
@@ -113,6 +147,61 @@ export default function AdminDepartmentsPage() {
             </button>
           </div>
         </form>
+      </Modal>
+
+      <Modal
+        open={Boolean(mergeSource)}
+        onClose={() => !merging && setMergeSource(null)}
+        title="Merge department"
+      >
+        {mergeSource && (
+          <form onSubmit={onMerge} className="space-y-4">
+            <div className="flex gap-3 rounded-lg border border-amber-200 bg-amber-50 p-4 text-amber-900 dark:border-amber-500/20 dark:bg-amber-500/10 dark:text-amber-100">
+              <GitMerge className="mt-0.5 h-5 w-5 shrink-0" />
+              <div>
+                <p className="font-semibold">Preserve linked records</p>
+                <p className="mt-1 text-sm leading-6">
+                  Programs, teachers, students, subjects, assignments, evaluations, completions, reports, and targeted announcements will move to the destination department. Then {mergeSource.code} will be deleted.
+                </p>
+              </div>
+            </div>
+            <FormField label="Destination department">
+              <select
+                required
+                value={mergeTargetId}
+                onChange={(event) => setMergeTargetId(event.target.value)}
+                className={inputCls}
+              >
+                <option value="">Select destination</option>
+                {depts.filter((department) => department.id !== mergeSource.id).map((department) => (
+                  <option key={department.id} value={department.id}>
+                    {department.code} - {department.name}
+                  </option>
+                ))}
+              </select>
+            </FormField>
+            <FormField label={`Type ${mergeSource.code} to confirm`}>
+              <input
+                value={mergeConfirmation}
+                onChange={(event) => setMergeConfirmation(event.target.value.toUpperCase())}
+                className={inputCls}
+                autoComplete="off"
+              />
+            </FormField>
+            <div className="flex justify-end gap-2 pt-2">
+              <button type="button" onClick={() => setMergeSource(null)} disabled={merging} className="btn-secondary">
+                Cancel
+              </button>
+              <button
+                type="submit"
+                disabled={merging || !mergeTargetId || mergeConfirmation !== mergeSource.code}
+                className="btn-primary disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <GitMerge className="h-4 w-4" /> {merging ? "Merging..." : "Merge and delete"}
+              </button>
+            </div>
+          </form>
+        )}
       </Modal>
     </div>
   );

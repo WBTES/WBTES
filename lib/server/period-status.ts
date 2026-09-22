@@ -12,9 +12,13 @@ import {
   consolidateComments,
 } from "@/lib/comment-analysis";
 import { ApiError } from "@/lib/server/require-admin";
+import { reportableEvaluations } from "@/lib/evaluation-results";
 import type {
   CommentAnalysis,
+  Evaluation,
+  EvaluationCompletion,
   PerformanceTrendPoint,
+  TeacherAssignment,
 } from "@/lib/types";
 
 type PeriodStatus = "draft" | "scheduled" | "open" | "closed";
@@ -270,6 +274,7 @@ export async function generatePerformanceReports(periodId: string) {
     subjects,
     periods,
     assignments,
+    completions,
   ] = await Promise.all([
     adminDb.collection("evaluations").where("periodId", "==", periodId).get(),
     adminDb.collection("evaluations").get(),
@@ -278,7 +283,23 @@ export async function generatePerformanceReports(periodId: string) {
     adminDb.collection("subjects").get(),
     adminDb.collection("evaluationPeriods").get(),
     adminDb.collection("teacherAssignments").where("periodId", "==", periodId).get(),
+    adminDb.collection("evaluationCompletions").where("periodId", "==", periodId).get(),
   ]);
+
+  const reportableIds = new Set(reportableEvaluations(
+    evaluations.docs.map((document) => ({
+      id: document.id,
+      ...(document.data() as Omit<Evaluation, "id">),
+    })),
+    assignments.docs.map((document) => ({
+      id: document.id,
+      ...(document.data() as Omit<TeacherAssignment, "id">),
+    })),
+    completions.docs.map((document) => ({
+      id: document.id,
+      ...(document.data() as Omit<EvaluationCompletion, "id">),
+    }))
+  ).map((evaluation) => evaluation.id));
 
   const assignedStudentIds = new Set<string>();
   assignments.docs.forEach((assignment) => {
@@ -359,6 +380,7 @@ export async function generatePerformanceReports(periodId: string) {
 
   const groups = new Map<string, QueryDocumentSnapshot<DocumentData>[]>();
   evaluations.docs.forEach((evaluation) => {
+    if (!reportableIds.has(evaluation.id)) return;
     const data = evaluation.data();
     const key = `${data.teacherId}|${data.subjectId}`;
     const group = groups.get(key) ?? [];

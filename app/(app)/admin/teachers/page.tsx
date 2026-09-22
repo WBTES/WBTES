@@ -85,7 +85,7 @@ export default function AdminTeachersPage() {
 
   const resetScope = (departmentId: string) => ({
     departmentId,
-    subjectIds: subjects.filter((subject) => subject.departmentId === departmentId).map((subject) => subject.id),
+    subjectIds: [] as string[],
     programIds: programs.filter((program) => program.departmentId === departmentId && program.status === "active").map((program) => program.id),
   });
 
@@ -111,9 +111,7 @@ export default function AdminTeachersPage() {
       email: teacher.email ?? "",
       employeeId: teacher.employeeId ?? "",
       departmentId: teacher.departmentId,
-      subjectIds: teacher.subjectIds ?? subjects
-        .filter((subject) => subject.departmentId === teacher.departmentId)
-        .map((subject) => subject.id),
+      subjectIds: teacher.subjectIds ?? [],
       programIds: teacher.programIds ?? programs
         .filter((program) => program.departmentId === teacher.departmentId)
         .map((program) => program.id),
@@ -226,8 +224,10 @@ export default function AdminTeachersPage() {
             key: "subjectIds",
             label: "Subjects",
             render: (row) => {
-              const count = (row as Teacher).subjectIds?.length ?? 0;
-              return `${count} assigned`;
+              const names = ((row as Teacher).subjectIds ?? [])
+                .map((id) => subjects.find((subject) => subject.id === id)?.code)
+                .filter(Boolean);
+              return names.length ? names.join(", ") : "No subjects";
             },
           },
           {

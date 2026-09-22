@@ -3,12 +3,15 @@ import { analyzeWeightedComments } from "@/lib/comment-analysis";
 import { adminDb } from "@/lib/firebase/admin";
 import { apiErrorResponse } from "@/lib/server/api-response";
 import { ApiError, requireRole } from "@/lib/server/require-admin";
+import { reportableEvaluations } from "@/lib/evaluation-results";
 import type {
   DepartmentHeadReport,
   Evaluation,
+  EvaluationCompletion,
   EvaluationPeriod,
   EvaluationQuestion,
   Teacher,
+  TeacherAssignment,
 } from "@/lib/types";
 
 export const runtime = "nodejs";
@@ -21,11 +24,13 @@ export async function GET(request: Request) {
     const departmentId = "";
 
     const selectedPeriodId = new URL(request.url).searchParams.get("periodId") || null;
-    const [periodDocs, teacherDocs, questionDocs, evaluationDocs] = await Promise.all([
+    const [periodDocs, teacherDocs, questionDocs, evaluationDocs, assignmentDocs, completionDocs] = await Promise.all([
       adminDb.collection("evaluationPeriods").get(),
       adminDb.collection("teachers").get(),
       adminDb.collection("evaluationQuestions").get(),
       adminDb.collection("evaluations").get(),
+      adminDb.collection("teacherAssignments").get(),
+      adminDb.collection("evaluationCompletions").get(),
     ]);
 
     const periods = periodDocs.docs
@@ -36,9 +41,21 @@ export async function GET(request: Request) {
       throw new ApiError(400, "Select a closed evaluation period.");
     }
     const closedIds = new Set(periods.map((period) => period.id));
-    const allReleased = evaluationDocs.docs
+    const allSubmitted = evaluationDocs.docs
       .map((item) => ({ id: item.id, ...(item.data() as Omit<Evaluation, "id">) }))
       .filter((item) => closedIds.has(item.periodId));
+    const assignments = assignmentDocs.docs.map((item) => ({
+      id: item.id,
+      ...(item.data() as Omit<TeacherAssignment, "id">),
+    }));
+    const completions = completionDocs.docs.map((item) => ({
+      id: item.id,
+      ...(item.data() as Omit<EvaluationCompletion, "id">),
+    }));
+    const allReleased = reportableEvaluations(allSubmitted, assignments, completions);
+    const selectedSubmitted = selectedPeriodId
+      ? allSubmitted.filter((item) => item.periodId === selectedPeriodId)
+      : allSubmitted;
     const selected = selectedPeriodId
       ? allReleased.filter((item) => item.periodId === selectedPeriodId)
       : allReleased;
@@ -66,24 +83,26 @@ export async function GET(request: Request) {
     const analysis = protectedResults ? analyzeWeightedComments([]) : analyzeWeightedComments(comments);
 
     const teacherRows = [...teachers.values()].map((teacher) => {
+      const submittedRows = selectedSubmitted.filter((evaluation) => evaluation.teacherId === teacher.id);
       const rows = selected.filter((evaluation) => evaluation.teacherId === teacher.id);
       const isProtected = rows.length < MINIMUM_RESPONSES;
       return {
         teacherId: teacher.id,
         teacherName: teacher.displayName,
-        responses: rows.length,
+        responses: submittedRows.length,
         average: isProtected ? null : average(rows.map((row) => row.averageScore)),
         protected: isProtected,
       };
     }).sort((a, b) => b.responses - a.responses || a.teacherName.localeCompare(b.teacherName));
 
     const trends = periods.slice().reverse().map((period) => {
+      const submittedRows = allSubmitted.filter((evaluation) => evaluation.periodId === period.id);
       const rows = allReleased.filter((evaluation) => evaluation.periodId === period.id);
       return {
         periodId: period.id,
         periodName: period.name,
         endDate: period.endDate,
-        responses: rows.length,
+        responses: submittedRows.length,
         average: rows.length < MINIMUM_RESPONSES ? null : average(rows.map((row) => row.averageScore)),
       };
     });
@@ -95,7 +114,7 @@ export async function GET(request: Request) {
       selectedPeriodId,
       periods: periods.map(({ id, name, endDate }) => ({ id, name, endDate })),
       teacherCount: teachers.size,
-      responseCount: selected.length,
+      responseCount: selectedSubmitted.length,
       averageRating: protectedResults ? null : average(selected.map((row) => row.averageScore)),
       resultsProtected: protectedResults,
       categories: protectedResults ? [] : [...categoryValues.entries()].map(([category, values]) => ({

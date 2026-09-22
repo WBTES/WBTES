@@ -25,6 +25,7 @@ import type { DepartmentOverview, Evaluation, EvaluationCompletion, EvaluationPe
 import { AnnouncementFeed, useVisibleAnnouncements } from "@/components/announcement-feed";
 import { fmtDateTime, fmtRelative } from "@/lib/utils-extras";
 import { authenticatedFetch, readApiResponse } from "@/lib/authenticated-fetch";
+import { reportableEvaluations } from "@/lib/evaluation-results";
 
 export default function DashboardOverview() {
   const { user, profile, loading } = useAuth();
@@ -58,6 +59,7 @@ export default function DashboardOverview() {
         const evalCount = evals.data().count;
         // Compute average rating + completion in a single pass
         let totalScore = 0;
+        let reportableEvaluationCount = 0;
         let totalSlots = 0;
         let completedStudents = 0;
         let pendingStudents = 0;
@@ -69,8 +71,21 @@ export default function DashboardOverview() {
             getDocs(collection(db, "evaluationCompletions")),
           ]);
           const slots = new Map<string, { studentId: string; completed: boolean }>();
-          evalsSnap.forEach((d) => {
-            const data = d.data() as Evaluation;
+          const assignmentRows = assignsSnap.docs.map((d) => ({
+            id: d.id,
+            ...(d.data() as Omit<TeacherAssignment, "id">),
+          }));
+          const completionRows = completionSnap.docs.map((d) => ({
+            id: d.id,
+            ...(d.data() as Omit<EvaluationCompletion, "id">),
+          }));
+          const evaluationRows = evalsSnap.docs.map((d) => ({
+            id: d.id,
+            ...(d.data() as Omit<Evaluation, "id">),
+          }));
+          const finalEvaluationRows = reportableEvaluations(evaluationRows, assignmentRows, completionRows);
+          reportableEvaluationCount = finalEvaluationRows.length;
+          finalEvaluationRows.forEach((data) => {
             if (typeof data.averageScore === "number") totalScore += data.averageScore;
           });
           assignsSnap.forEach((d) => {
@@ -108,7 +123,9 @@ export default function DashboardOverview() {
         } catch (e) {
           console.warn("admin avg/completion calc failed:", e);
         }
-        const avg = evalCount > 0 ? (totalScore / evalCount).toFixed(2) : "—";
+        const avg = reportableEvaluationCount > 0
+          ? (totalScore / reportableEvaluationCount).toFixed(2)
+          : "—";
         const completion = totalSlots > 0 ? Math.round((completedSlots / totalSlots) * 100) : 0;
         setStats({
           users: users.data().count,
