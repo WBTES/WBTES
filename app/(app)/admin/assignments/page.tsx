@@ -6,7 +6,7 @@ import { AlertCircle, CheckCircle2, Clock3, Eye, Pencil, Plus, UsersRound } from
 import { addDoc, collection, deleteDoc, doc, getDocs, onSnapshot, orderBy, query, updateDoc, where, writeBatch } from "firebase/firestore";
 import { db, firebaseReady } from "@/lib/firebase/client";
 import { usePrograms } from "@/lib/use-programs";
-import { recordActivity } from "@/lib/authenticated-fetch";
+import { authenticatedFetch, readApiResponse, recordActivity } from "@/lib/authenticated-fetch";
 import { PageHeader, Modal, FormField, inputCls } from "@/components/data-table";
 import type { AppUser, Subject, Department, EvaluationCompletion, EvaluationPeriod, TeacherAssignment, Teacher } from "@/lib/types";
 import toast from "react-hot-toast";
@@ -279,6 +279,17 @@ export default function AdminAssignmentsPage() {
         updatedAt: Date.now(),
       };
       if (editingAssignment) {
+        const subjectCorrected = editingAssignment.subjectId !== form.subjectId;
+        if (subjectCorrected && completedStudentIds.size > 0) {
+          const response = await authenticatedFetch("/api/admin/assignments", {
+            method: "PATCH",
+            body: JSON.stringify({
+              assignmentId: editingAssignment.id,
+              subjectId: form.subjectId,
+            }),
+          });
+          await readApiResponse<{ ok: true; recordsUpdated: number }>(response);
+        }
         await updateDoc(doc(db, "teacherAssignments", editingAssignment.id), payload);
         void recordActivity("teacher_assignment_updated", {
           assignmentId: editingAssignment.id,
@@ -286,7 +297,11 @@ export default function AdminAssignmentsPage() {
           periodId: form.periodId,
           students: studentIds.length,
         });
-        toast.success(`Assignment updated for ${studentIds.length} student${studentIds.length === 1 ? "" : "s"}`);
+        toast.success(
+          subjectCorrected && completedStudentIds.size > 0
+            ? `Subject corrected and assignment updated for ${studentIds.length} student${studentIds.length === 1 ? "" : "s"}`
+            : `Assignment updated for ${studentIds.length} student${studentIds.length === 1 ? "" : "s"}`
+        );
       } else {
         const created = await addDoc(collection(db, "teacherAssignments"), {
           ...payload,
@@ -393,6 +408,9 @@ export default function AdminAssignmentsPage() {
   const progressCompletions = progressAssignment
     ? completions.filter((completion) => completion.assignmentId === progressAssignment.id)
     : [];
+  const progressSubject = progressAssignment
+    ? subjects.find((subject) => subject.id === progressAssignment.subjectId)
+    : undefined;
   const progressCompletionByStudent = new Map(
     progressCompletions.map((completion) => [completion.studentId, completion])
   );
@@ -553,7 +571,7 @@ export default function AdminAssignmentsPage() {
                 {teachers.find((teacher) => teacher.id === progressAssignment.teacherId)?.displayName ?? "Teacher"}
               </p>
               <p className="text-sm text-slate-500">
-                {subjects.find((subject) => subject.id === progressAssignment.subjectId)?.code ?? "Subject"}
+                {progressSubject ? formatSubjectLabel(progressSubject) : "Subject unavailable"}
                 {" / "}
                 {periods.find((period) => period.id === progressAssignment.periodId)?.name ?? "Evaluation period"}
               </p>
@@ -815,10 +833,14 @@ export default function AdminAssignmentsPage() {
               ))}
             </select>
           </FormField>
-          <FormField label="Subject">
+          <FormField
+            label="Subject"
+            hint={editingAssignment && completedStudentIds.size > 0
+              ? "Changing this subject also corrects the linked response and completion records."
+              : undefined}
+          >
             <select
               required
-              disabled={Boolean(editingAssignment && completedStudentIds.size > 0)}
               value={form.subjectId}
               onChange={(event) => {
                 const subjectId = event.target.value;

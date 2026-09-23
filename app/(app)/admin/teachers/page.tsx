@@ -226,7 +226,9 @@ export default function AdminTeachersPage() {
             label: "Subjects",
             render: (row) => {
               const names = ((row as Teacher).subjectIds ?? [])
-                .map((id) => subjects.find((subject) => subject.id === id)?.code)
+                .map((id) => subjects.find((subject) => subject.id === id))
+                .filter((subject): subject is Subject => Boolean(subject))
+                .map(formatSubjectLabel)
                 .filter(Boolean);
               return names.length ? names.join(", ") : "No subjects";
             },
