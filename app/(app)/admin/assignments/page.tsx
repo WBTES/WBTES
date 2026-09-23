@@ -2,7 +2,7 @@
 
 import * as React from "react";
 import Link from "next/link";
-import { AlertCircle, CheckCircle2, Pencil, Plus, UsersRound } from "lucide-react";
+import { AlertCircle, CheckCircle2, Clock3, Eye, Pencil, Plus, UsersRound } from "lucide-react";
 import { addDoc, collection, deleteDoc, doc, getDocs, onSnapshot, orderBy, query, updateDoc, where, writeBatch } from "firebase/firestore";
 import { db, firebaseReady } from "@/lib/firebase/client";
 import { usePrograms } from "@/lib/use-programs";
@@ -10,7 +10,7 @@ import { recordActivity } from "@/lib/authenticated-fetch";
 import { PageHeader, Modal, FormField, inputCls } from "@/components/data-table";
 import type { AppUser, Subject, Department, EvaluationCompletion, EvaluationPeriod, TeacherAssignment, Teacher } from "@/lib/types";
 import toast from "react-hot-toast";
-import { fmtDate } from "@/lib/utils-extras";
+import { fmtDateTime } from "@/lib/utils-extras";
 
 export default function AdminAssignmentsPage() {
   const { programs } = usePrograms();
@@ -22,7 +22,9 @@ export default function AdminAssignmentsPage() {
   const [periods, setPeriods] = React.useState<EvaluationPeriod[]>([]);
   const [open, setOpen] = React.useState(false);
   const [editingAssignment, setEditingAssignment] = React.useState<TeacherAssignment | null>(null);
+  const [progressAssignment, setProgressAssignment] = React.useState<TeacherAssignment | null>(null);
   const [completedStudentIds, setCompletedStudentIds] = React.useState<Set<string>>(new Set());
+  const [completions, setCompletions] = React.useState<EvaluationCompletion[]>([]);
   const [bulkOpen, setBulkOpen] = React.useState(false);
   const [form, setForm] = React.useState({
     teacherId: "",
@@ -59,11 +61,21 @@ export default function AdminAssignmentsPage() {
       setPeriods(snap.docs.map((d) => ({ id: d.id, ...(d.data() as Omit<EvaluationPeriod, "id">) })));
     }));
     unsubs.push(onSnapshot(collection(db, "evaluationCompletions"), (snap) => {
+      const rows = snap.docs.map((item) => ({
+        id: item.id,
+        ...(item.data() as Omit<EvaluationCompletion, "id">),
+      }));
+      const completedByAssignment: Record<string, Set<string>> = {};
       const counts: Record<string, number> = {};
-      snap.docs.forEach((item) => {
-        const completion = item.data() as EvaluationCompletion;
-        if (completion.assignmentId) counts[completion.assignmentId] = (counts[completion.assignmentId] ?? 0) + 1;
+      rows.forEach((completion) => {
+        if (!completion.assignmentId || !completion.studentId) return;
+        completedByAssignment[completion.assignmentId] ??= new Set<string>();
+        completedByAssignment[completion.assignmentId].add(completion.studentId);
       });
+      Object.entries(completedByAssignment).forEach(([assignmentId, studentIds]) => {
+        counts[assignmentId] = studentIds.size;
+      });
+      setCompletions(rows);
       setCompletionCounts(counts);
     }));
     return () => unsubs.forEach((u) => u());
@@ -377,6 +389,23 @@ export default function AdminAssignmentsPage() {
     && selectedTeacher?.subjectIds?.includes(subject.id)
   );
   const scopedStudents = eligibleStudents(form.teacherId, form.subjectId);
+  const progressCompletions = progressAssignment
+    ? completions.filter((completion) => completion.assignmentId === progressAssignment.id)
+    : [];
+  const progressCompletionByStudent = new Map(
+    progressCompletions.map((completion) => [completion.studentId, completion])
+  );
+  const progressStudents = progressAssignment
+    ? progressAssignment.studentIds.map((studentId) => ({
+        studentId,
+        student: students.find((item) => item.uid === studentId),
+        completion: progressCompletionByStudent.get(studentId),
+      })).sort((left, right) => {
+        if (Boolean(left.completion) !== Boolean(right.completion)) return left.completion ? -1 : 1;
+        return (left.student?.displayName ?? left.student?.email ?? left.studentId)
+          .localeCompare(right.student?.displayName ?? right.student?.email ?? right.studentId);
+      })
+    : [];
 
   return (
     <div>
@@ -482,6 +511,14 @@ export default function AdminAssignmentsPage() {
                     </td>
                     <td className="px-4 py-3 text-right">
                       <button
+                        onClick={() => setProgressAssignment(a)}
+                        className="mr-1 rounded-lg p-1.5 text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800"
+                        title="View student progress"
+                        aria-label="View student progress"
+                      >
+                        <Eye className="h-4 w-4" />
+                      </button>
+                      <button
                         onClick={() => void openEdit(a)}
                         className="mr-1 rounded-lg p-1.5 text-brand-700 hover:bg-brand-50 dark:text-brand-300 dark:hover:bg-brand-500/10"
                         title="Edit assignment"
@@ -501,6 +538,76 @@ export default function AdminAssignmentsPage() {
           </table>
         </div>
       </div>
+
+      <Modal
+        open={Boolean(progressAssignment)}
+        onClose={() => setProgressAssignment(null)}
+        title="Student evaluation progress"
+        size="lg"
+      >
+        {progressAssignment && (
+          <div className="space-y-4">
+            <div>
+              <p className="font-semibold text-slate-950 dark:text-white">
+                {teachers.find((teacher) => teacher.id === progressAssignment.teacherId)?.displayName ?? "Teacher"}
+              </p>
+              <p className="text-sm text-slate-500">
+                {subjects.find((subject) => subject.id === progressAssignment.subjectId)?.code ?? "Subject"}
+                {" / "}
+                {periods.find((period) => period.id === progressAssignment.periodId)?.name ?? "Evaluation period"}
+              </p>
+            </div>
+
+            <div className="grid grid-cols-3 gap-2">
+              <ProgressSummary label="Assigned" value={progressStudents.length} tone="neutral" />
+              <ProgressSummary label="Completed" value={progressStudents.filter((item) => item.completion).length} tone="complete" />
+              <ProgressSummary label="Pending" value={progressStudents.filter((item) => !item.completion).length} tone="pending" />
+            </div>
+
+            <div className="max-h-[50vh] divide-y divide-slate-100 overflow-y-auto rounded-lg border border-slate-200 dark:divide-slate-800 dark:border-slate-800">
+              {progressStudents.length === 0 ? (
+                <p className="px-4 py-8 text-center text-sm text-slate-500">No students are assigned.</p>
+              ) : progressStudents.map(({ studentId, student, completion }) => {
+                const program = programs.find((item) => item.id === student?.programId);
+                const academicDetails = [
+                  program?.code ?? student?.course,
+                  student?.yearLevel ? `Year ${student.yearLevel}` : "",
+                  student?.section ? `Section ${student.section}` : "",
+                ].filter(Boolean).join(" / ");
+                return (
+                  <div key={studentId} className="flex items-start justify-between gap-4 px-4 py-3">
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-medium text-slate-950 dark:text-white">
+                        {student?.displayName || student?.email || studentId}
+                      </p>
+                      <p className="truncate text-xs text-slate-500">
+                        {student?.email && student.displayName ? `${student.email} / ` : ""}
+                        {academicDetails || "No academic details"}
+                      </p>
+                    </div>
+                    {completion ? (
+                      <div className="shrink-0 text-right">
+                        <span className="inline-flex items-center gap-1 text-xs font-semibold text-emerald-600 dark:text-emerald-400">
+                          <CheckCircle2 className="h-3.5 w-3.5" /> Completed
+                        </span>
+                        <p className="mt-0.5 text-[11px] text-slate-500">{fmtDateTime(completion.submittedAt)}</p>
+                      </div>
+                    ) : (
+                      <span className="inline-flex shrink-0 items-center gap-1 text-xs font-semibold text-amber-600 dark:text-amber-400">
+                        <Clock3 className="h-3.5 w-3.5" /> Pending
+                      </span>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+
+            <div className="flex justify-end">
+              <button type="button" onClick={() => setProgressAssignment(null)} className="btn-secondary">Close</button>
+            </div>
+          </div>
+        )}
+      </Modal>
 
       <Modal
         open={bulkOpen}
@@ -814,6 +921,29 @@ export default function AdminAssignmentsPage() {
           </div>
         </form>
       </Modal>
+    </div>
+  );
+}
+
+function ProgressSummary({
+  label,
+  value,
+  tone,
+}: {
+  label: string;
+  value: number;
+  tone: "neutral" | "complete" | "pending";
+}) {
+  const colors = {
+    neutral: "text-slate-950 dark:text-white",
+    complete: "text-emerald-600 dark:text-emerald-400",
+    pending: "text-amber-600 dark:text-amber-400",
+  };
+
+  return (
+    <div className="rounded-lg border border-slate-200 px-3 py-2.5 dark:border-slate-800">
+      <p className="text-xs text-slate-500">{label}</p>
+      <p className={`mt-1 text-xl font-bold ${colors[tone]}`}>{value}</p>
     </div>
   );
 }
