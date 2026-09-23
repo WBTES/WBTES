@@ -54,7 +54,7 @@ export function DataTable<T>({
         </div>
       )}
       <div className="overflow-x-auto">
-        <table className="w-full text-sm">
+        <table className="w-max min-w-full text-sm">
           <thead className="bg-slate-50 dark:bg-slate-800/50">
             <tr>
               {columns.map((c) => (
@@ -129,12 +129,12 @@ export function PageHeader({
   action?: React.ReactNode;
 }) {
   return (
-    <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-      <div>
+    <div className="mb-6 flex min-w-0 flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+      <div className="min-w-0">
         <h1 className="text-2xl font-bold tracking-tight sm:text-3xl">{title}</h1>
         {description && <p className="mt-1 text-sm text-slate-600 dark:text-slate-400">{description}</p>}
       </div>
-      {action}
+      {action && <div className="flex w-full shrink-0 flex-wrap gap-2 sm:w-auto sm:justify-end">{action}</div>}
     </div>
   );
 }
@@ -170,14 +170,14 @@ export function Modal({
             animate={{ opacity: 1, scale: 1, y: 0 }}
             exit={{ opacity: 0, scale: 0.95, y: 10 }}
             className={cn(
-              "fixed inset-x-4 top-[5dvh] z-50 mx-auto flex max-h-[90dvh] flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl dark:border-slate-800 dark:bg-slate-900",
+              "fixed inset-x-3 top-[3dvh] z-50 mx-auto flex max-h-[94dvh] flex-col overflow-hidden rounded-lg border border-slate-200 bg-white shadow-2xl dark:border-slate-800 dark:bg-slate-900 sm:inset-x-4 sm:top-[5dvh] sm:max-h-[90dvh]",
               size === "sm" && "sm:max-w-sm",
               size === "md" && "sm:max-w-lg",
               size === "lg" && "sm:max-w-3xl"
             )}
           >
-            <div className="flex shrink-0 items-center justify-between px-6 pb-4 pt-6">
-              <h2 className="text-lg font-semibold">{title}</h2>
+            <div className="flex shrink-0 items-center justify-between gap-3 px-4 pb-3 pt-4 sm:px-6 sm:pb-4 sm:pt-6">
+              <h2 className="min-w-0 text-base font-semibold sm:text-lg">{title}</h2>
               <button
                 type="button"
                 onClick={onClose}
@@ -187,7 +187,7 @@ export function Modal({
                 <X className="h-4 w-4" />
               </button>
             </div>
-            <div className={cn("min-h-0 flex-1 overflow-y-auto px-6 pb-6", contentClassName)}>
+            <div className={cn("min-h-0 flex-1 overflow-y-auto px-4 pb-4 sm:px-6 sm:pb-6", contentClassName)}>
               {children}
             </div>
           </motion.div>

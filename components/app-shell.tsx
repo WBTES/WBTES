@@ -298,11 +298,11 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const items = NAV[profile.role] || [];
 
   return (
-    <div className="flex min-h-screen bg-slate-50 dark:bg-slate-950">
+    <div className="flex min-h-screen min-w-0 bg-slate-50 dark:bg-slate-950">
       {/* Sidebar */}
       <aside
         className={cn(
-          "fixed inset-y-0 left-0 z-40 w-64 transform border-r border-slate-200 bg-white transition-transform duration-200 dark:border-slate-800 dark:bg-slate-900 lg:relative lg:translate-x-0",
+          "fixed inset-y-0 left-0 z-40 w-[min(18rem,calc(100vw-2rem))] transform border-r border-slate-200 bg-white transition-transform duration-200 dark:border-slate-800 dark:bg-slate-900 lg:relative lg:w-64 lg:translate-x-0",
           sidebarOpen ? "translate-x-0" : "-translate-x-full"
         )}
       >
@@ -374,7 +374,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       )}
 
       {/* Main */}
-      <div className="flex min-w-0 flex-1 flex-col">
+      <div className="flex min-w-0 flex-1 flex-col overflow-x-hidden">
         <header className="sticky top-0 z-20 flex h-16 items-center gap-3 border-b border-slate-200 bg-white/80 px-4 backdrop-blur-xl dark:border-slate-800 dark:bg-slate-900/80 sm:px-6">
           <button
             onClick={() => setSidebarOpen(true)}
@@ -406,7 +406,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               )}
             </button>
             {notifOpen && (
-              <div className="absolute right-0 mt-2 w-80 max-h-96 overflow-auto rounded-2xl border border-slate-200 bg-white p-2 shadow-2xl dark:border-slate-800 dark:bg-slate-900">
+              <div className="absolute right-0 mt-2 max-h-[min(24rem,calc(100dvh-5rem))] w-[min(20rem,calc(100vw-2rem))] overflow-auto rounded-lg border border-slate-200 bg-white p-2 shadow-2xl dark:border-slate-800 dark:bg-slate-900">
                 <div className="flex items-center justify-between px-3 py-2">
                   <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">Notifications</p>
                   {unread > 0 && (
@@ -492,7 +492,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           </div>
         </header>
 
-        <main className="flex-1 p-4 sm:p-6 lg:p-8">{children}</main>
+        <main className="min-w-0 flex-1 p-4 sm:p-6 lg:p-8">{children}</main>
       </div>
     </div>
   );
