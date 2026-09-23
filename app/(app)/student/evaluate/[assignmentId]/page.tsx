@@ -28,7 +28,7 @@ import type {
 } from "@/lib/types";
 import { getStudentEvaluationQuestions } from "@/lib/evaluation-questions";
 import { authenticatedFetch, readApiResponse } from "@/lib/authenticated-fetch";
-import { cn } from "@/lib/utils";
+import { cn, formatSubjectLabel } from "@/lib/utils";
 import toast from "react-hot-toast";
 
 export default function EvaluatePage() {
@@ -237,7 +237,7 @@ export default function EvaluatePage() {
           </div>
         </div>
         <div className="mt-5 grid gap-x-6 gap-y-4 border-t border-slate-200 pt-5 sm:grid-cols-2 dark:border-slate-800">
-          <AssignmentDetail icon={BookOpen} label="Course/Subject" value={`${subject.code} - ${subject.name}`} />
+          <AssignmentDetail icon={BookOpen} label="Course/Subject" value={formatSubjectLabel(subject)} />
           <AssignmentDetail icon={UserRound} label="Teacher/Instructor" value={teacher.displayName} />
           <AssignmentDetail icon={GraduationCap} label="Program" value={program ? `${program.code} - ${program.name}` : profile.course || "Not specified"} />
           <AssignmentDetail

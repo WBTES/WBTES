@@ -11,6 +11,7 @@ import { PageHeader, Modal, FormField, inputCls } from "@/components/data-table"
 import type { AppUser, Subject, Department, EvaluationCompletion, EvaluationPeriod, TeacherAssignment, Teacher } from "@/lib/types";
 import toast from "react-hot-toast";
 import { fmtDateTime } from "@/lib/utils-extras";
+import { formatSubjectLabel } from "@/lib/utils";
 
 export default function AdminAssignmentsPage() {
   const { programs } = usePrograms();
@@ -496,7 +497,7 @@ export default function AdminAssignmentsPage() {
                   <tr key={a.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/30">
                     <td className="px-4 py-3 font-medium">{teacher?.displayName ?? a.teacherId}</td>
                     <td className="px-4 py-3">
-                      <span className="font-medium">{subject ? `${subject.code} - ${subject.name}` : a.subjectId}</span>
+                      <span className="font-medium">{subject ? formatSubjectLabel(subject) : a.subjectId}</span>
                       {!subjectMatchesTeacher && (
                         <span className="ml-2 inline-flex rounded bg-rose-500/10 px-1.5 py-0.5 text-xs font-semibold text-rose-600 dark:text-rose-300">
                           Not assigned to teacher
@@ -733,7 +734,7 @@ export default function AdminAssignmentsPage() {
                           {row.subjects.length > 1 && <option value="">Select subject</option>}
                           {row.subjects.map((subject) => (
                             <option key={subject.id} value={subject.id}>
-                              {subject.code} - {subject.name}
+                              {formatSubjectLabel(subject)}
                             </option>
                           ))}
                         </>
@@ -831,7 +832,7 @@ export default function AdminAssignmentsPage() {
             >
               <option value="">Select subject</option>
               {eligibleSubjects.map((s) => (
-                <option key={s.id} value={s.id}>{s.code} — {s.name}</option>
+                <option key={s.id} value={s.id}>{formatSubjectLabel(s)}</option>
               ))}
             </select>
           </FormField>

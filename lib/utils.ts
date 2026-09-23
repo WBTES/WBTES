@@ -12,3 +12,8 @@ export function formatRoleLabel(role: string) {
   if (role === "student") return "Student";
   return role.replaceAll("_", " ");
 }
+
+export function formatSubjectLabel(subject: { name: string; code?: string | null }) {
+  const code = subject.code?.trim();
+  return code ? `${code} - ${subject.name}` : subject.name;
+}

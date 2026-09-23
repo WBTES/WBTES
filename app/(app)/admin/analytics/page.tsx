@@ -27,6 +27,7 @@ import {
 import { db } from "@/lib/firebase/client";
 import { PageHeader } from "@/components/data-table";
 import { reportableEvaluations } from "@/lib/evaluation-results";
+import { formatSubjectLabel } from "@/lib/utils";
 import type {
   AppUser,
   Department,
@@ -247,7 +248,7 @@ export default function AdminAnalyticsPage() {
             <label className="text-xs font-medium text-slate-500">Subject
               <select value={subjectId} onChange={(event) => setSubjectId(event.target.value)} className="mt-1 block w-full rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-950 dark:text-white">
                 <option value="">All assigned subjects</option>
-                {teacherSubjects.map((subject) => <option key={subject.id} value={subject.id}>{subject.code} - {subject.name}</option>)}
+                {teacherSubjects.map((subject) => <option key={subject.id} value={subject.id}>{formatSubjectLabel(subject)}</option>)}
               </select>
             </label>
           </div>

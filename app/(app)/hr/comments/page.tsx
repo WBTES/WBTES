@@ -19,6 +19,7 @@ import { useAuth } from "@/lib/firebase/auth-context";
 import { PageHeader, FormField, inputCls } from "@/components/data-table";
 import { consolidateComments } from "@/lib/comment-analysis";
 import { loadReleasedDepartmentResults } from "@/lib/firebase/department-results";
+import { formatSubjectLabel } from "@/lib/utils";
 import type {
   Evaluation,
   EvaluationPeriod,
@@ -93,7 +94,7 @@ export default function HrCommentsPage() {
     [teachers]
   );
   const subjectNames = React.useMemo(
-    () => new Map(subjects.map((subject) => [subject.id, `${subject.code} - ${subject.name}`])),
+    () => new Map(subjects.map((subject) => [subject.id, formatSubjectLabel(subject)])),
     [subjects]
   );
   const periodNames = React.useMemo(
@@ -211,7 +212,7 @@ export default function HrCommentsPage() {
                   className={inputCls}
                 >
                   <option value="">All subjects</option>
-                  {subjects.map((subject) => <option key={subject.id} value={subject.id}>{subject.code} - {subject.name}</option>)}
+                  {subjects.map((subject) => <option key={subject.id} value={subject.id}>{formatSubjectLabel(subject)}</option>)}
                 </select>
               </FormField>
               <FormField label="Evaluation period">

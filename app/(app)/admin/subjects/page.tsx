@@ -36,7 +36,7 @@ export default function AdminSubjectsPage() {
   };
   const openEdit = (s: Subject) => {
     setEditing(s);
-    setForm({ name: s.name, code: s.code, departmentId: s.departmentId });
+    setForm({ name: s.name, code: s.code ?? "", departmentId: s.departmentId });
     setOpen(true);
   };
 
@@ -103,7 +103,7 @@ export default function AdminSubjectsPage() {
         rows={subjects}
         searchKeys={["name", "code"]}
         columns={[
-          { key: "code", label: "Code" },
+          { key: "code", label: "Code", render: (subject) => subject.code?.trim() || "—" },
           { key: "name", label: "Name" },
           {
             key: "departmentId",
@@ -121,8 +121,8 @@ export default function AdminSubjectsPage() {
           <FormField label="Name">
             <input required value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} className={inputCls} />
           </FormField>
-          <FormField label="Code">
-            <input required value={form.code} onChange={(e) => setForm({ ...form, code: e.target.value })} className={inputCls} />
+          <FormField label="Code (optional)" hint="Leave this blank when the subject does not use a separate code.">
+            <input value={form.code} onChange={(e) => setForm({ ...form, code: e.target.value })} className={inputCls} placeholder="Example: AP5" />
           </FormField>
           <FormField label="Department">
             <select required value={form.departmentId} onChange={(e) => setForm({ ...form, departmentId: e.target.value })} className={inputCls}>

@@ -21,6 +21,7 @@ import {
   Modal,
   PageHeader,
 } from "@/components/data-table";
+import { formatSubjectLabel } from "@/lib/utils";
 import { db, firebaseReady } from "@/lib/firebase/client";
 import { usePrograms } from "@/lib/use-programs";
 import {
@@ -282,7 +283,7 @@ export default function AdminTeachersPage() {
           <CheckList
             label="Assigned subjects"
             values={form.subjectIds}
-            options={departmentSubjects.map((subject) => ({ id: subject.id, label: `${subject.code} - ${subject.name}` }))}
+            options={departmentSubjects.map((subject) => ({ id: subject.id, label: formatSubjectLabel(subject) }))}
             onChange={(subjectIds) => setForm({ ...form, subjectIds })}
           />
           <CheckList
