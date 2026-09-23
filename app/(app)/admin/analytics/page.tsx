@@ -441,12 +441,12 @@ function buildAnalytics(input: {
     departmentAverages: input.departments.map((department) => {
       const score = departmentScores.get(department.id);
       return {
-        name: department.code,
+        name: department.name || department.code,
         average: score ? Number((score.total / score.count).toFixed(2)) : 0,
       };
     }).filter((item) => item.average > 0),
     departmentCounts: input.departments.map((department) => ({
-      name: department.code,
+      name: department.name || department.code,
       evaluations: departmentScores.get(department.id)?.count ?? 0,
     })).filter((item) => item.evaluations > 0),
     trend: input.periods
@@ -473,7 +473,7 @@ function buildAnalytics(input: {
       const item = completionDepartmentMap.get(department.id) ?? { completed: 0, pending: 0 };
       const total = item.completed + item.pending;
       return {
-        department: department.code,
+        department: department.name || department.code,
         ...item,
         rate: total ? Math.round(item.completed / total * 100) : 0,
       };

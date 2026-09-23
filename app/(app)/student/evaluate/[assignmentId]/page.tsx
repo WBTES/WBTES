@@ -3,11 +3,29 @@
 import * as React from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
-import { Send, ArrowLeft, CheckCircle2, LockKeyhole } from "lucide-react";
+import {
+  ArrowLeft,
+  BookOpen,
+  Building2,
+  CalendarDays,
+  CheckCircle2,
+  GraduationCap,
+  LockKeyhole,
+  Send,
+  UserRound,
+} from "lucide-react";
 import { collection, doc, getDoc, getDocs, query, where } from "firebase/firestore";
 import { db, firebaseReady } from "@/lib/firebase/client";
 import { useAuth } from "@/lib/firebase/auth-context";
-import type { TeacherAssignment, Teacher, Subject, EvaluationQuestion, EvaluationPeriod } from "@/lib/types";
+import type {
+  Department,
+  EvaluationPeriod,
+  EvaluationQuestion,
+  Program,
+  Subject,
+  Teacher,
+  TeacherAssignment,
+} from "@/lib/types";
 import { getStudentEvaluationQuestions } from "@/lib/evaluation-questions";
 import { authenticatedFetch, readApiResponse } from "@/lib/authenticated-fetch";
 import { cn } from "@/lib/utils";
@@ -21,6 +39,8 @@ export default function EvaluatePage() {
   const [teacher, setTeacher] = React.useState<Teacher | null>(null);
   const [subject, setSubject] = React.useState<Subject | null>(null);
   const [period, setPeriod] = React.useState<EvaluationPeriod | null>(null);
+  const [department, setDepartment] = React.useState<Department | null>(null);
+  const [program, setProgram] = React.useState<Program | null>(null);
   const [questions, setQuestions] = React.useState<EvaluationQuestion[]>([]);
   const [answers, setAnswers] = React.useState<Record<string, number | string>>({});
   const [comment, setComment] = React.useState("");
@@ -41,10 +61,12 @@ export default function EvaluatePage() {
         const a = { id: aSnap.id, ...(aSnap.data() as Omit<TeacherAssignment, "id">) };
         setAssignment(a);
 
-        const [tSnap, sSnap, pSnap, qSnap, eSnap] = await Promise.all([
+        const [tSnap, sSnap, pSnap, dSnap, programSnap, qSnap, eSnap] = await Promise.all([
           getDoc(doc(db, "teachers", a.teacherId)),
           getDoc(doc(db, "subjects", a.subjectId)),
           getDoc(doc(db, "evaluationPeriods", a.periodId)),
+          getDoc(doc(db, "departments", a.departmentId)),
+          profile.programId ? getDoc(doc(db, "programs", profile.programId)) : Promise.resolve(null),
           getDocs(collection(db, "evaluationQuestions")),
           getDocs(query(
             collection(db, "evaluationCompletions"),
@@ -53,6 +75,8 @@ export default function EvaluatePage() {
         ]);
         if (tSnap.exists()) setTeacher({ id: tSnap.id, ...(tSnap.data() as Omit<Teacher, "id">) });
         if (sSnap.exists()) setSubject({ id: sSnap.id, ...(sSnap.data() as Omit<Subject, "id">) });
+        if (dSnap.exists()) setDepartment({ id: dSnap.id, ...(dSnap.data() as Omit<Department, "id">) });
+        if (programSnap?.exists()) setProgram({ id: programSnap.id, ...(programSnap.data() as Omit<Program, "id">) });
         const periodData = pSnap.exists()
           ? { id: pSnap.id, ...(pSnap.data() as Omit<EvaluationPeriod, "id">) }
           : null;
@@ -153,7 +177,7 @@ export default function EvaluatePage() {
     );
   }
 
-  if (!assignment || !teacher || !subject || !period) {
+  if (!profile || !assignment || !teacher || !subject || !period) {
     return <div className="rounded-2xl border border-rose-200 bg-rose-50 p-6 text-rose-700">Evaluation not found.</div>;
   }
 
@@ -206,10 +230,23 @@ export default function EvaluatePage() {
           <div className="flex h-14 w-14 items-center justify-center rounded-xl bg-slate-900 dark:bg-white text-white dark:text-slate-900 text-xl font-bold shadow-sm">
             {teacher.displayName?.[0]?.toUpperCase()}
           </div>
-          <div>
-            <h1 className="text-xl font-bold text-slate-900 dark:text-white">{teacher.displayName}</h1>
-            <p className="text-sm text-slate-500 dark:text-slate-400">{subject.name} • {period.name}</p>
+          <div className="min-w-0">
+            <p className="text-xs font-semibold uppercase text-brand-700 dark:text-brand-300">Teacher evaluation</p>
+            <h1 className="truncate text-xl font-bold text-slate-900 dark:text-white">{teacher.displayName}</h1>
+            <p className="text-sm text-slate-500 dark:text-slate-400">Review the assignment details before answering.</p>
           </div>
+        </div>
+        <div className="mt-5 grid gap-x-6 gap-y-4 border-t border-slate-200 pt-5 sm:grid-cols-2 dark:border-slate-800">
+          <AssignmentDetail icon={BookOpen} label="Course/Subject" value={`${subject.code} - ${subject.name}`} />
+          <AssignmentDetail icon={UserRound} label="Teacher/Instructor" value={teacher.displayName} />
+          <AssignmentDetail icon={GraduationCap} label="Program" value={program ? `${program.code} - ${program.name}` : profile.course || "Not specified"} />
+          <AssignmentDetail
+            icon={GraduationCap}
+            label="Year and Section"
+            value={[profile.yearLevel && `${profile.yearLevel} year`, profile.section && `Section ${profile.section}`].filter(Boolean).join(" - ") || "Not specified"}
+          />
+          <AssignmentDetail icon={Building2} label="Department" value={department ? `${department.code} - ${department.name}` : "Not specified"} />
+          <AssignmentDetail icon={CalendarDays} label="Evaluation Period" value={period.name} />
         </div>
         <div className="mt-4 flex items-start gap-2 rounded-xl border border-slate-200/60 bg-slate-100 p-3 text-xs text-slate-700 dark:border-slate-700/60 dark:bg-slate-800/80 dark:text-slate-300">
           <LockKeyhole className="mt-0.5 h-3.5 w-3.5 shrink-0" />
@@ -282,6 +319,26 @@ export default function EvaluatePage() {
           {submitting ? "Submitting..." : (<><Send className="h-4 w-4" /> Submit evaluation</>)}
         </button>
       </form>
+    </div>
+  );
+}
+
+function AssignmentDetail({
+  icon: Icon,
+  label,
+  value,
+}: {
+  icon: React.ComponentType<{ className?: string }>;
+  label: string;
+  value: string;
+}) {
+  return (
+    <div className="flex min-w-0 items-start gap-3">
+      <Icon className="mt-0.5 h-4 w-4 shrink-0 text-brand-600 dark:text-brand-300" />
+      <div className="min-w-0">
+        <p className="text-xs font-medium text-slate-500">{label}</p>
+        <p className="mt-0.5 break-words text-sm font-semibold text-slate-900 dark:text-white">{value}</p>
+      </div>
     </div>
   );
 }

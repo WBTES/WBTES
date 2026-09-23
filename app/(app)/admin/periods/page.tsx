@@ -1,14 +1,14 @@
 "use client";
 
 import * as React from "react";
-import { Plus, Calendar, Eye, Play, StopCircle } from "lucide-react";
-import { collection, onSnapshot, addDoc, updateDoc, deleteDoc, doc, getDocs, query, orderBy, where } from "firebase/firestore";
+import { AlertTriangle, Plus, Calendar, Eye, Play, StopCircle, Trash2 } from "lucide-react";
+import { collection, onSnapshot, addDoc, updateDoc, doc, query, orderBy } from "firebase/firestore";
 import { db, firebaseReady } from "@/lib/firebase/client";
 import { useAuth } from "@/lib/firebase/auth-context";
 import { usePrograms } from "@/lib/use-programs";
 import { PageHeader, Modal, FormField, inputCls } from "@/components/data-table";
 import { EvaluationFormPreview } from "@/components/evaluation-form-preview";
-import { recordActivity } from "@/lib/authenticated-fetch";
+import { authenticatedFetch, readApiResponse, recordActivity } from "@/lib/authenticated-fetch";
 import { requestAdminNavigationRefresh } from "@/lib/admin-navigation";
 import type { EvaluationForm, EvaluationPeriod, EvaluationQuestion, PeriodStatus, Program } from "@/lib/types";
 import toast from "react-hot-toast";
@@ -48,6 +48,9 @@ export default function AdminPeriodsPage() {
   });
   const [loading, setLoading] = React.useState(false);
   const [changingStatus, setChangingStatus] = React.useState<string | null>(null);
+  const [forceDeletePeriod, setForceDeletePeriod] = React.useState<EvaluationPeriod | null>(null);
+  const [deleteConfirmation, setDeleteConfirmation] = React.useState("");
+  const [deleting, setDeleting] = React.useState(false);
 
   React.useEffect(() => {
     if (!firebaseReady) return;
@@ -197,26 +200,52 @@ export default function AdminPeriodsPage() {
   };
 
   const onDelete = async (p: EvaluationPeriod) => {
+    if (!confirm(`Delete period ${p.name}?`)) return;
     try {
-      const collections = [
-        "teacherAssignments",
-        "evaluations",
-        "evaluationCompletions",
-        "performanceReports",
-      ];
-      const dependencies = await Promise.all(collections.map((name) =>
-        getDocs(query(collection(db, name), where("periodId", "==", p.id)))
-      ));
-      if (dependencies.some((snapshot) => !snapshot.empty)) {
-        throw new Error("This period has assignments or evaluation history and cannot be deleted.");
-      }
-      if (!confirm(`Delete period ${p.name}?`)) return;
-      await deleteDoc(doc(db, "evaluationPeriods", p.id));
-      void recordActivity("evaluation_period_deleted", { periodId: p.id });
+      const response = await authenticatedFetch(
+        `/api/admin/periods?id=${encodeURIComponent(p.id)}`,
+        { method: "DELETE" }
+      );
+      await readApiResponse<{ ok: true }>(response);
       toast.success("Period deleted");
       requestAdminNavigationRefresh();
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Period deletion failed.");
+      const message = error instanceof Error ? error.message : "Period deletion failed.";
+      if (message.startsWith("This period has assignments or evaluation history")) {
+        setForceDeletePeriod(p);
+        setDeleteConfirmation("");
+        toast.error("This period contains evaluation history. Permanent deletion requires confirmation.");
+      } else {
+        toast.error(message);
+      }
+    }
+  };
+
+  const onForceDelete = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!forceDeletePeriod || deleteConfirmation !== forceDeletePeriod.name) return;
+    setDeleting(true);
+    try {
+      const response = await authenticatedFetch(
+        `/api/admin/periods?id=${encodeURIComponent(forceDeletePeriod.id)}&force=true`,
+        {
+          method: "DELETE",
+          body: JSON.stringify({ confirmation: deleteConfirmation }),
+        }
+      );
+      const result = await readApiResponse<{
+        ok: true;
+        deletedDependencies: Record<string, number>;
+      }>(response);
+      const deletedRecords = Object.values(result.deletedDependencies)
+        .reduce((total, count) => total + count, 0);
+      toast.success(`Period permanently deleted with ${deletedRecords} linked record${deletedRecords === 1 ? "" : "s"}.`);
+      setForceDeletePeriod(null);
+      requestAdminNavigationRefresh();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Permanent deletion failed.");
+    } finally {
+      setDeleting(false);
     }
   };
 
@@ -406,6 +435,65 @@ export default function AdminPeriodsPage() {
             </button>
           </div>
         </form>
+      </Modal>
+
+      <Modal
+        open={Boolean(forceDeletePeriod)}
+        onClose={() => {
+          if (deleting) return;
+          setForceDeletePeriod(null);
+          setDeleteConfirmation("");
+        }}
+        title="Permanently delete period"
+      >
+        {forceDeletePeriod && (
+          <form onSubmit={onForceDelete} className="space-y-4">
+            <div className="flex gap-3 rounded-lg border border-rose-200 bg-rose-50 p-4 text-rose-900 dark:border-rose-900/60 dark:bg-rose-950/30 dark:text-rose-100">
+              <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0" />
+              <div>
+                <p className="font-semibold">This action cannot be undone</p>
+                <p className="mt-1 text-sm text-rose-700 dark:text-rose-200">
+                  Deleting {forceDeletePeriod.name} also permanently removes its teacher assignments,
+                  anonymous evaluation responses, student completion records, and generated reports.
+                  Audit logs are retained.
+                </p>
+              </div>
+            </div>
+
+            <FormField label={`Type "${forceDeletePeriod.name}" to confirm`}>
+              <input
+                value={deleteConfirmation}
+                onChange={(event) => setDeleteConfirmation(event.target.value)}
+                className={inputCls}
+                placeholder={`Type "${forceDeletePeriod.name}"`}
+                autoComplete="off"
+                autoFocus
+              />
+            </FormField>
+
+            <div className="flex justify-end gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setForceDeletePeriod(null);
+                  setDeleteConfirmation("");
+                }}
+                disabled={deleting}
+                className="btn-secondary"
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                disabled={deleting || deleteConfirmation !== forceDeletePeriod.name}
+                className="btn-primary !bg-rose-600 hover:!bg-rose-700 disabled:hover:!bg-rose-600"
+              >
+                <Trash2 className="h-4 w-4" />
+                {deleting ? "Deleting..." : "Permanently delete"}
+              </button>
+            </div>
+          </form>
+        )}
       </Modal>
 
       <Modal
