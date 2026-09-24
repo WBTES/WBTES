@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { User, Mail, Shield, Save, Camera, Trash2, Loader2 } from "lucide-react";
 import { useAuth } from "@/lib/firebase/auth-context";
 import { doc, updateDoc } from "firebase/firestore";
-import { sendEmailVerification, updateProfile as updateAuthProfile } from "firebase/auth";
+import { updateProfile as updateAuthProfile } from "firebase/auth";
 import { auth, db, firebaseReady } from "@/lib/firebase/client";
 import { usePrograms } from "@/lib/use-programs";
 import { formatRoleLabel } from "@/lib/utils";
@@ -53,11 +53,12 @@ async function fileToCompressedDataUrl(file: File): Promise<string> {
 
 export default function ProfilePage() {
   const router = useRouter();
-  const { user, profile, refreshProfile } = useAuth();
+  const { user, profile, refreshProfile, resendVerification } = useAuth();
   const { programs } = usePrograms();
   const [name, setName] = React.useState(profile?.displayName ?? "");
   const [saving, setSaving] = React.useState(false);
   const [uploading, setUploading] = React.useState(false);
+  const [sendingVerification, setSendingVerification] = React.useState(false);
   const fileInputRef = React.useRef<HTMLInputElement>(null);
 
   React.useEffect(() => {
@@ -146,13 +147,19 @@ export default function ProfilePage() {
   };
 
   const onResendVerification = async () => {
-    if (!auth.currentUser) return;
+    setSendingVerification(true);
     try {
-      await sendEmailVerification(auth.currentUser);
-      toast.success("Verification email sent");
+      const delivery = await resendVerification();
+      toast.success(delivery === "sent"
+        ? "Verification email sent"
+        : delivery === "verified"
+          ? "Your email is already verified"
+          : "Verification email sent recently; check your inbox");
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : "Could not send verification email";
       toast.error(msg);
+    } finally {
+      setSendingVerification(false);
     }
   };
 
@@ -228,9 +235,10 @@ export default function ProfilePage() {
                 <button
                   type="button"
                   onClick={onResendVerification}
+                  disabled={sendingVerification}
                   className="btn-secondary text-xs"
                 >
-                  <Mail className="h-3.5 w-3.5" /> Resend verification
+                  {sendingVerification ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Mail className="h-3.5 w-3.5" />} Resend verification
                 </button>
               )}
             </div>

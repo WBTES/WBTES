@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { isSmtpConfigured, sendSmtpEmail, SmtpSendingLimitError } from "@/lib/email/smtp";
 import { adminAuth, adminDb, adminReady } from "@/lib/firebase/admin";
 import { normalizeEmail } from "@/lib/server/api-response";
+import { isSmtpSendingPaused, pauseSmtpSending } from "@/lib/server/email-delivery-status";
 
 export const runtime = "nodejs";
 
@@ -27,6 +28,12 @@ export async function POST(request: Request) {
   if (!adminReady || !isSmtpConfigured()) {
     return NextResponse.json(
       { error: "Password recovery is temporarily unavailable. Contact an administrator." },
+      { status: 503 }
+    );
+  }
+  if (await isSmtpSendingPaused()) {
+    return NextResponse.json(
+      { error: "The email provider's daily sending limit has been reached. Please try again later or contact an administrator." },
       { status: 503 }
     );
   }
@@ -71,6 +78,7 @@ export async function POST(request: Request) {
     return response();
   } catch (error) {
     console.error("Password reset delivery failed:", error);
+    if (error instanceof SmtpSendingLimitError) await pauseSmtpSending();
     if (claimed) {
       try {
         await requestRef.delete();

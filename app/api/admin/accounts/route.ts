@@ -1,6 +1,5 @@
 import { NextResponse } from "next/server";
 import { adminAuth, adminDb } from "@/lib/firebase/admin";
-import { isSmtpConfigured, sendSmtpEmail } from "@/lib/email/smtp";
 import {
   apiErrorResponse,
   asString,
@@ -10,9 +9,8 @@ import {
 import { writeAuditLog } from "@/lib/server/audit";
 import { ApiError, requireAdmin } from "@/lib/server/require-admin";
 import {
-  generateWbtesVerificationLink,
-  isVerificationRateLimited,
-  verificationSignInUrl,
+  deliverVerificationEmail,
+  type VerificationDelivery,
 } from "@/lib/server/verification-email";
 import type { AppUser, UserRole } from "@/lib/types";
 
@@ -86,35 +84,21 @@ export async function POST(request: Request) {
 
     let emailed = false;
     let warning = "";
-    if (requiresVerification && isSmtpConfigured()) {
+    if (requiresVerification) {
       try {
-        const verificationLink = await generateWbtesVerificationLink(
-          input.email,
-          "staff"
-        );
-        const signInUrl = verificationSignInUrl();
-        await sendSmtpEmail({
-          to: input.email,
-          subject: `Verify your WBTE ${staffRoleLabel(input.role)} account`,
-          text: [
-            `Hello ${input.displayName},`,
-            "",
-            `Your ${staffRoleLabel(input.role)} account is ready.`,
-            `Username: ${input.username}`,
-            `Verify your email: ${verificationLink}`,
-            ...(signInUrl
-              ? [`Sign in: ${signInUrl}`]
-              : ["After verification, return to the WBTE sign-in page on the computer running the local server."]),
-          ].join("\n"),
+        const delivery = await deliverVerificationEmail({
+          uid: created.uid,
+          email: input.email,
+          displayName: input.displayName,
+          username: input.username,
+          context: "staff",
         });
-        emailed = true;
+        emailed = delivery === "sent";
+        warning = verificationDeliveryWarning(delivery);
       } catch (error) {
-        warning = isVerificationRateLimited(error)
-          ? "Firebase temporarily blocked verification-link requests. No email was sent; try again later."
-          : error instanceof Error ? error.message : "Verification email failed.";
+        console.warn("Staff verification delivery failed:", error);
+        warning = "Staff account created, but the verification email could not be sent. Try again later.";
       }
-    } else if (requiresVerification) {
-      warning = "Staff account created, but SMTP is not configured for the verification email.";
     }
     await writeAuditLog({
       userId: admin.uid,
@@ -195,31 +179,18 @@ export async function PATCH(request: Request) {
     });
     let warning = "";
     if (becameVerifiedStaff) {
-      if (isSmtpConfigured()) {
-        try {
-          const verificationLink = await generateWbtesVerificationLink(
-            input.email,
-            "staff"
-          );
-          const signInUrl = verificationSignInUrl();
-          await sendSmtpEmail({
-            to: input.email,
-            subject: `Verify your WBTE ${staffRoleLabel(input.role)} account`,
-            text: [
-              `Hello ${input.displayName},`,
-              "",
-              `Your account role was changed to ${staffRoleLabel(input.role)}.`,
-              `Verify your email: ${verificationLink}`,
-              ...(signInUrl ? [`Sign in: ${signInUrl}`] : []),
-            ].join("\n"),
-          });
-        } catch (error) {
-          warning = isVerificationRateLimited(error)
-            ? "Firebase temporarily blocked verification-link requests. No email was sent; try again later."
-            : error instanceof Error ? error.message : "Staff verification email failed.";
-        }
-      } else {
-        warning = "The staff role changed, but SMTP is not configured for the verification email.";
+      try {
+        const delivery = await deliverVerificationEmail({
+          uid,
+          email: input.email,
+          displayName: input.displayName,
+          username: input.username,
+          context: "staff",
+        });
+        warning = verificationDeliveryWarning(delivery);
+      } catch (error) {
+        console.warn("Staff verification delivery failed:", error);
+        warning = "The staff role changed, but the verification email could not be sent. Try again later.";
       }
     }
     return NextResponse.json({ ok: true, warning: warning || undefined });
@@ -342,8 +313,12 @@ function departmentRoleField(role: UserRole | null) {
   return null;
 }
 
-function staffRoleLabel(role: StaffRole) {
-  if (role === "hr") return "HR";
-  if (role === "department_head") return "Department Head";
-  return "Administrator";
+function verificationDeliveryWarning(delivery: VerificationDelivery) {
+  if (delivery === "sent") return "";
+  if (delivery === "recent") return "A verification email was sent recently. Check the inbox before requesting another.";
+  if (delivery === "processing") return "A verification email request is already in progress. Wait a moment before trying again.";
+  if (delivery === "rate_limited") return "Firebase temporarily blocked verification-link requests. No email was sent. Wait before trying again.";
+  if (delivery === "smtp_rate_limited") return "The email provider's daily sending limit was reached. No verification email was sent. Try again later or change the mail provider.";
+  if (delivery === "smtp_unavailable") return "The email provider could not deliver the verification email. Check SMTP limits and server logs before retrying.";
+  return "Firebase could not create a verification link. No email was sent. Try again later.";
 }

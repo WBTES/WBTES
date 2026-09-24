@@ -118,7 +118,7 @@ export async function POST(request: Request) {
       && !decoded.email_verified
     ) {
       const delivery = mode === "login" && method === "password"
-        ? await deliverVerificationEmail(request, {
+        ? await deliverVerificationEmail({
             uid: decoded.uid,
             email,
             displayName: profile.displayName,
@@ -129,8 +129,14 @@ export async function POST(request: Request) {
         ? "A new verification link was sent to your inbox."
         : delivery === "recent"
           ? "A verification link was sent recently; check your inbox and spam folder."
+          : delivery === "processing"
+            ? "A verification email is being prepared; wait a moment before trying again."
           : delivery === "rate_limited"
             ? "Firebase temporarily blocked new verification links. Wait before trying again or use a link already in your inbox."
+          : delivery === "smtp_rate_limited"
+            ? "The email provider's sending limit was reached, so no new link was sent. Contact an administrator or try again later."
+          : delivery === "smtp_unavailable"
+            ? "The verification email could not be delivered. Contact an administrator."
           : "Open the verification email issued for your account or contact an administrator.";
       throw new ApiError(
         403,

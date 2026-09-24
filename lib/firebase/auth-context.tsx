@@ -4,7 +4,6 @@ import * as React from "react";
 import {
   GoogleAuthProvider,
   onAuthStateChanged,
-  sendEmailVerification,
   signInWithEmailAndPassword,
   signInWithCustomToken,
   signInWithPopup,
@@ -25,7 +24,7 @@ type AuthContextValue = {
   completeStudentRegistration: (customToken: string) => Promise<void>;
   signOut: () => Promise<void>;
   resetPassword: (email: string) => Promise<void>;
-  resendVerification: () => Promise<void>;
+  resendVerification: () => Promise<"sent" | "recent" | "verified">;
   refreshProfile: () => Promise<void>;
 };
 
@@ -205,17 +204,18 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const resendVerification = React.useCallback(async () => {
     if (!auth.currentUser) throw new Error("Sign in before requesting another verification email.");
-    const hostname = window.location.hostname.toLowerCase();
-    const isLoopback = hostname === "localhost"
-      || hostname === "127.0.0.1"
-      || hostname === "::1"
-      || hostname.endsWith(".localhost");
-    await sendEmailVerification(
-      auth.currentUser,
-      isLoopback
-        ? undefined
-        : { url: `${window.location.origin}/login?verified=1` }
-    );
+    const token = await auth.currentUser.getIdToken();
+    const response = await fetch("/api/auth/verification", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    const data = await response.json() as {
+      delivery?: "sent" | "recent" | "verified";
+      error?: string;
+    };
+    if (!response.ok) throw new Error(data.error ?? "Verification email could not be sent.");
+    if (!data.delivery) throw new Error("Verification email status was not returned.");
+    return data.delivery;
   }, []);
 
   const refreshProfile = React.useCallback(async () => {

@@ -1,13 +1,17 @@
 import "server-only";
 
+import { randomUUID } from "node:crypto";
 import { adminAuth, adminDb } from "@/lib/firebase/admin";
-import { isSmtpConfigured, sendSmtpEmail } from "@/lib/email/smtp";
+import { isSmtpConfigured, sendSmtpEmail, SmtpSendingLimitError } from "@/lib/email/smtp";
+import { isSmtpSendingPaused, pauseSmtpSending } from "@/lib/server/email-delivery-status";
 
 export type VerificationDelivery =
   | "sent"
   | "recent"
+  | "processing"
   | "rate_limited"
   | "link_unavailable"
+  | "smtp_rate_limited"
   | "smtp_unavailable";
 
 type VerificationContext = "student" | "staff";
@@ -47,27 +51,66 @@ export function isVerificationRateLimited(error: unknown) {
   const code = (error as { code?: string } | null)?.code;
   const message = error instanceof Error ? error.message : "";
   return code === "auth/too-many-requests"
-    || message.includes("TOO_MANY_ATTEMPTS_TRY_LATER");
+    || code === "auth/quota-exceeded"
+    || /too.many.attempts|quota.exceeded|rate.limit/i.test(message);
 }
 
 export async function deliverVerificationEmail(
-  _request: Request,
   input: {
     uid: string;
     email: string;
     displayName: string;
+    username?: string;
     context?: VerificationContext;
   }
 ): Promise<VerificationDelivery> {
   if (!isSmtpConfigured()) return "smtp_unavailable";
+  if (await isSmtpSendingPaused()) return "smtp_rate_limited";
 
   const deliveryRef = adminDb
     .collection("verificationDeliveries")
     .doc(input.uid);
-  const delivery = await deliveryRef.get();
-  const lastSentAt = Number(delivery.data()?.lastSentAt ?? 0);
-  if (lastSentAt > Date.now() - 5 * 60_000) {
-    return "recent";
+  const attemptId = randomUUID();
+  const now = Date.now();
+  try {
+    const existing = await adminDb.runTransaction(async (transaction) => {
+      const delivery = await transaction.get(deliveryRef);
+      const data = delivery.data();
+      const nextAllowedAt = Number(data?.nextAllowedAt ?? Number(data?.lastSentAt ?? 0) + 5 * 60_000);
+      if (nextAllowedAt > now) {
+        return (data?.lastResult as VerificationDelivery | undefined) ?? "recent";
+      }
+      transaction.set(deliveryRef, {
+        email: input.email,
+        attemptId,
+        lastResult: "processing",
+        nextAllowedAt: now + 2 * 60_000,
+        updatedAt: now,
+      }, { merge: true });
+      return null;
+    });
+    if (existing) return existing;
+  } catch (error) {
+    console.warn("Verification delivery cooldown could not be checked:", error);
+    return "link_unavailable";
+  }
+
+  async function finish(result: VerificationDelivery, cooldownMs: number) {
+    try {
+      await adminDb.runTransaction(async (transaction) => {
+        const delivery = await transaction.get(deliveryRef);
+        if (delivery.data()?.attemptId !== attemptId) return;
+        transaction.set(deliveryRef, {
+          lastResult: result,
+          nextAllowedAt: Date.now() + cooldownMs,
+          ...(result === "sent" ? { lastSentAt: Date.now() } : {}),
+          updatedAt: Date.now(),
+        }, { merge: true });
+      });
+    } catch (error) {
+      console.warn("Verification delivery result could not be saved:", error);
+    }
+    return result;
   }
 
   const signInUrl = verificationSignInUrl();
@@ -79,7 +122,9 @@ export async function deliverVerificationEmail(
     );
   } catch (error) {
     console.warn("Verification link generation failed:", error);
-    return isVerificationRateLimited(error) ? "rate_limited" : "link_unavailable";
+    return isVerificationRateLimited(error)
+      ? finish("rate_limited", 60 * 60_000)
+      : finish("link_unavailable", 5 * 60_000);
   }
 
   try {
@@ -90,6 +135,7 @@ export async function deliverVerificationEmail(
         `Hello ${input.displayName},`,
         "",
         "Verify your email address before signing in to WBTE.",
+        ...(input.username ? [`Username: ${input.username}`] : []),
         "Open the secure page below, then select Verify email.",
         `Verification page: ${verificationLink}`,
         "",
@@ -101,19 +147,14 @@ export async function deliverVerificationEmail(
     });
   } catch (error) {
     console.warn("Verification SMTP delivery failed:", error);
-    return "smtp_unavailable";
+    if (error instanceof SmtpSendingLimitError) {
+      await pauseSmtpSending();
+      return finish("smtp_rate_limited", 60 * 60_000);
+    }
+    return finish("smtp_unavailable", 10 * 60_000);
   }
 
-  try {
-    await deliveryRef.set({
-      email: input.email,
-      lastSentAt: Date.now(),
-      updatedAt: Date.now(),
-    }, { merge: true });
-  } catch (error) {
-    console.warn("Verification delivery record could not be saved:", error);
-  }
-  return "sent";
+  return finish("sent", 5 * 60_000);
 }
 
 function buildHostedVerificationLink(

@@ -34,7 +34,7 @@ export async function POST(request: Request) {
       throw new ApiError(409, "The staff email does not match Firebase Authentication.");
     }
 
-    const delivery = await deliverVerificationEmail(request, {
+    const delivery = await deliverVerificationEmail({
       uid,
       email: account.email,
       displayName: String(profile.displayName ?? account.displayName ?? "Staff member"),
@@ -43,11 +43,17 @@ export async function POST(request: Request) {
     if (delivery === "rate_limited") {
       throw new ApiError(429, "Firebase temporarily blocked verification-link requests. No email was sent. Wait before trying again.");
     }
+    if (delivery === "processing") {
+      throw new ApiError(429, "A verification request is already in progress. Wait a moment before trying again.");
+    }
     if (delivery === "link_unavailable") {
       throw new ApiError(503, "Firebase could not create a verification link. No email was sent. Check the server logs.");
     }
     if (delivery === "smtp_unavailable") {
       throw new ApiError(503, "The verification email could not be delivered by SMTP. Check SMTP settings and server logs.");
+    }
+    if (delivery === "smtp_rate_limited") {
+      throw new ApiError(503, "The email provider's daily sending limit was reached. No verification email was sent. Try again later or change the mail provider.");
     }
     return NextResponse.json({ delivery });
   } catch (error) {
