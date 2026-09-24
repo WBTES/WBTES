@@ -5,6 +5,7 @@ import {
   BarChart3,
   CheckCircle2,
   Clock3,
+  RefreshCw,
   Star,
   Users,
 } from "lucide-react";
@@ -45,7 +46,7 @@ type AnalyticsData = {
   departmentAverages: Array<{ name: string; average: number }>;
   departmentCounts: Array<{ name: string; evaluations: number }>;
   trend: Array<{ period: string; average: number; evaluations: number }>;
-  topTeachers: Array<{ name: string; average: number }>;
+  topTeachers: Array<{ id: string; name: string; average: number }>;
   completionByDepartment: Array<{ department: string; completed: number; pending: number; rate: number }>;
   totalStudents: number;
   completedStudents: number;
@@ -77,9 +78,12 @@ export default function AdminAnalyticsPage() {
   const [teacherId, setTeacherId] = React.useState("");
   const [subjectId, setSubjectId] = React.useState("");
   const [loading, setLoading] = React.useState(true);
+  const [hasLoaded, setHasLoaded] = React.useState(false);
+  const [error, setError] = React.useState("");
 
-  React.useEffect(() => {
-    void (async () => {
+  const loadAnalytics = React.useCallback(async () => {
+      setLoading(true);
+      setError("");
       try {
         const [
           evaluationSnapshot,
@@ -149,11 +153,20 @@ export default function AdminAnalyticsPage() {
           periods,
           students,
         }));
+        setHasLoaded(true);
+      } catch (cause) {
+        setError(cause instanceof Error ? cause.message : "Analytics could not be loaded.");
       } finally {
         setLoading(false);
       }
-    })();
   }, []);
+
+  React.useEffect(() => {
+    void loadAnalytics();
+    const refresh = () => void loadAnalytics();
+    window.addEventListener("focus", refresh);
+    return () => window.removeEventListener("focus", refresh);
+  }, [loadAnalytics]);
 
   const teacherSubjects = React.useMemo(() => {
     const ids = new Set(assignments
@@ -185,9 +198,17 @@ export default function AdminAnalyticsPage() {
     const selectedCompletions = completions.filter((completion) =>
       assignmentIds.has(completion.assignmentId)
     );
+    const completedSlots = new Set(selectedCompletions
+      .map((completion) => `${completion.studentId}_${completion.assignmentId}`)
+      .filter((key) => slots.has(key)));
     const selectedEvaluations = finalEvaluations.filter((evaluation) =>
-      (!teacherId || evaluation.teacherId === teacherId)
-      && (!subjectId || evaluation.subjectId === subjectId)
+      evaluation.assignmentId
+        ? assignmentIds.has(evaluation.assignmentId)
+        : selectedAssignments.some((assignment) =>
+            assignment.teacherId === evaluation.teacherId
+            && assignment.subjectId === evaluation.subjectId
+            && assignment.periodId === evaluation.periodId
+          )
     );
     const distribution = [1, 2, 3, 4, 5].map((rating) => ({
       rating: `${rating} star${rating === 1 ? "" : "s"}`,
@@ -195,18 +216,22 @@ export default function AdminAnalyticsPage() {
         Math.max(1, Math.min(5, Math.round(evaluation.averageScore))) === rating
       ).length,
     }));
-    const completed = new Set(selectedCompletions
-      .map((completion) => `${completion.studentId}_${completion.assignmentId}`)
-      .filter((key) => slots.has(key))).size;
+    const completed = completedSlots.size;
     return {
       assigned: slots.size,
       completed,
       pending: Math.max(slots.size - completed, 0),
-      ready: slots.size > 0 && completed === slots.size,
+      finalizedAssignments: selectedAssignments.filter((assignment) => {
+        const assigned = new Set(assignment.studentIds ?? []);
+        return assigned.size > 0 && [...assigned].every((studentId) =>
+          completedSlots.has(`${studentId}_${assignment.id}`)
+        );
+      }).length,
       average: selectedEvaluations.length
         ? selectedEvaluations.reduce((sum, evaluation) => sum + evaluation.averageScore, 0) / selectedEvaluations.length
         : 0,
       distribution,
+      ratedResponses: selectedEvaluations.length,
     };
   }, [assignments, completions, finalEvaluations, subjectId, teacherId]);
 
@@ -217,26 +242,30 @@ export default function AdminAnalyticsPage() {
         * 100
       )
     : 0;
+  const metricValue = (value: string | number) => hasLoaded ? value : loading ? "..." : "--";
 
   return (
     <div>
       <PageHeader
         title="Analytics"
         description="Evaluation volume, student completion, teacher ratings, department comparison, and historical trends."
+        action={<button type="button" onClick={() => void loadAnalytics()} disabled={loading} className="btn-secondary"><RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} /> Refresh</button>}
       />
 
+      {error && <div role="alert" className="mb-4 rounded-lg border border-rose-200 bg-rose-50 p-4 text-sm text-rose-800 dark:border-rose-900 dark:bg-rose-950/30 dark:text-rose-200">{error}</div>}
+
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <Metric label="Total evaluations" value={loading ? "..." : data.totalEvaluations} icon={BarChart3} />
-        <Metric label="Students completed" value={loading ? "..." : data.completedStudents} icon={CheckCircle2} tone="green" />
-        <Metric label="Students pending" value={loading ? "..." : data.pendingStudents} icon={Clock3} tone="amber" />
-        <Metric label="Completion rate" value={loading ? "..." : `${completionRate}%`} icon={Users} />
+        <Metric label="Responses received" value={metricValue(data.totalEvaluations)} icon={BarChart3} />
+        <Metric label="Students finished all tasks" value={metricValue(data.completedStudents)} icon={CheckCircle2} tone="green" />
+        <Metric label="Students with pending tasks" value={metricValue(data.pendingStudents)} icon={Clock3} tone="amber" />
+        <Metric label="Student completion rate" value={metricValue(`${completionRate}%`)} icon={Users} />
       </div>
 
       <section className="mt-4 rounded-lg border border-slate-200 bg-white p-5 dark:border-slate-800 dark:bg-slate-900">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
           <div>
             <h2 className="font-semibold">Teacher and subject completion</h2>
-            <p className="mt-1 text-sm text-slate-500">Each bar represents a student&apos;s rounded overall evaluation score.</p>
+            <p className="mt-1 text-sm text-slate-500">Ratings include responses only from assignments where every assigned student has finished.</p>
           </div>
           <div className="grid gap-3 sm:grid-cols-2 lg:w-[560px]">
             <label className="text-xs font-medium text-slate-500">Teacher
@@ -253,45 +282,46 @@ export default function AdminAnalyticsPage() {
             </label>
           </div>
         </div>
-        <div className="mt-5 grid gap-3 sm:grid-cols-4">
+        <div className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
           <SelectionMetric label="Assigned" value={selection.assigned} />
           <SelectionMetric label="Completed" value={selection.completed} tone="green" />
           <SelectionMetric label="Pending" value={selection.pending} tone="amber" />
-          <SelectionMetric label="Average rating" value={selection.ready ? selection.average.toFixed(2) : "Pending completion"} />
+          <SelectionMetric label="Finalized assignments" value={selection.finalizedAssignments} />
+          <SelectionMetric label="Released average" value={selection.ratedResponses ? selection.average.toFixed(2) : "--"} />
         </div>
-        {!selection.ready && selection.assigned > 0 && (
+        {selection.pending > 0 && (
           <p className="mt-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-500/20 dark:bg-amber-500/10 dark:text-amber-200">
-            Final ratings are hidden until all {selection.assigned} assigned student evaluations are completed. {selection.pending} still pending.
+            {selection.pending} assigned evaluation{selection.pending === 1 ? "" : "s"} still pending. Ratings for each assignment appear once all of its assigned students finish.
           </p>
         )}
-        <div className="mt-5 h-[300px]">
-          <ResponsiveContainer width="100%" height="100%">
+        <div className="mt-5 h-[300px] min-w-0">
+          {selection.ratedResponses > 0 ? <ResponsiveContainer width="100%" height="100%">
             <BarChart data={selection.distribution} margin={{ top: 8, right: 8, left: 0, bottom: 8 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="rgba(148,163,184,0.22)" />
               <XAxis dataKey="rating" tick={{ fontSize: 12 }} />
               <YAxis allowDecimals={false} tick={{ fontSize: 12 }} />
-              <Tooltip cursor={false} contentStyle={tooltipStyle} />
+              <Tooltip cursor={false} contentStyle={tooltipStyle} itemStyle={tooltipTextStyle} labelStyle={tooltipTextStyle} />
               <Bar dataKey="students" name="Students" fill="#2563eb" radius={[6, 6, 0, 0]} />
             </BarChart>
-          </ResponsiveContainer>
+          </ResponsiveContainer> : <RatingEmptyState />}
         </div>
       </section>
 
       <div className="mt-4 grid gap-4 lg:grid-cols-2">
         <ChartPanel title="Average rating by department">
-          <ResponsiveContainer width="100%" height={290}>
+          {data.departmentAverages.length > 0 ? <ResponsiveContainer width="100%" height={290}>
             <BarChart data={data.departmentAverages}>
               <CartesianGrid strokeDasharray="3 3" stroke="rgba(148,163,184,0.22)" />
               <XAxis dataKey="name" tick={{ fontSize: 11 }} />
               <YAxis domain={[0, 5]} tick={{ fontSize: 11 }} />
-              <Tooltip cursor={false} contentStyle={tooltipStyle} />
+              <Tooltip cursor={false} contentStyle={tooltipStyle} itemStyle={tooltipTextStyle} labelStyle={tooltipTextStyle} />
               <Bar dataKey="average" fill="#2563eb" radius={[6, 6, 0, 0]} />
             </BarChart>
-          </ResponsiveContainer>
+          </ResponsiveContainer> : <RatingEmptyState />}
         </ChartPanel>
 
-        <ChartPanel title="Evaluation responses by department">
-          <ResponsiveContainer width="100%" height={290}>
+        <ChartPanel title="Submitted responses by department">
+          {data.departmentCounts.length > 0 ? <ResponsiveContainer width="100%" height={290}>
             <PieChart>
               <Pie
                 data={data.departmentCounts}
@@ -306,36 +336,36 @@ export default function AdminAnalyticsPage() {
                   <Cell key={item.name} fill={COLORS[index % COLORS.length]} />
                 ))}
               </Pie>
-              <Tooltip cursor={false} contentStyle={tooltipStyle} />
+              <Tooltip cursor={false} contentStyle={tooltipStyle} itemStyle={tooltipTextStyle} labelStyle={tooltipTextStyle} />
             </PieChart>
-          </ResponsiveContainer>
+          </ResponsiveContainer> : <div className="flex h-[290px] items-center justify-center text-sm text-slate-500">No responses submitted yet.</div>}
         </ChartPanel>
 
         <ChartPanel title="Teacher performance trend">
-          <ResponsiveContainer width="100%" height={290}>
+          {data.trend.length > 0 ? <ResponsiveContainer width="100%" height={290}>
             <LineChart data={data.trend}>
               <CartesianGrid strokeDasharray="3 3" stroke="rgba(148,163,184,0.22)" />
               <XAxis dataKey="period" tick={{ fontSize: 11 }} />
               <YAxis domain={[0, 5]} tick={{ fontSize: 11 }} />
-              <Tooltip cursor={false} contentStyle={tooltipStyle} />
+              <Tooltip cursor={false} contentStyle={tooltipStyle} itemStyle={tooltipTextStyle} labelStyle={tooltipTextStyle} />
               <Legend />
               <Line type="monotone" dataKey="average" name="Average rating" stroke="#059669" strokeWidth={3} dot={{ r: 4 }} />
             </LineChart>
-          </ResponsiveContainer>
+          </ResponsiveContainer> : <RatingEmptyState />}
         </ChartPanel>
 
         <ChartPanel title="Completed and pending by department">
-          <ResponsiveContainer width="100%" height={290}>
+          {data.completionByDepartment.length > 0 ? <ResponsiveContainer width="100%" height={290}>
             <BarChart data={data.completionByDepartment}>
               <CartesianGrid strokeDasharray="3 3" stroke="rgba(148,163,184,0.22)" />
               <XAxis dataKey="department" tick={{ fontSize: 11 }} />
               <YAxis allowDecimals={false} tick={{ fontSize: 11 }} />
-              <Tooltip cursor={false} contentStyle={tooltipStyle} />
+              <Tooltip cursor={false} contentStyle={tooltipStyle} itemStyle={tooltipTextStyle} labelStyle={tooltipTextStyle} />
               <Legend />
               <Bar dataKey="completed" stackId="status" fill="#059669" />
               <Bar dataKey="pending" stackId="status" fill="#d97706" radius={[6, 6, 0, 0]} />
             </BarChart>
-          </ResponsiveContainer>
+          </ResponsiveContainer> : <div className="flex h-[290px] items-center justify-center text-sm text-slate-500">No student assignments yet.</div>}
         </ChartPanel>
       </div>
 
@@ -354,7 +384,7 @@ export default function AdminAnalyticsPage() {
             {data.topTeachers.length === 0 ? (
               <p className="text-sm text-slate-500">No rating data yet.</p>
             ) : data.topTeachers.map((teacher, index) => (
-              <div key={teacher.name} className="flex items-center justify-between rounded-md bg-slate-50 px-3 py-2 dark:bg-slate-800">
+              <div key={teacher.id} className="flex items-center justify-between rounded-md bg-slate-50 px-3 py-2 dark:bg-slate-800">
                 <span className="text-sm"><strong className="mr-2 text-slate-400">{index + 1}</strong>{teacher.name}</span>
                 <span className="font-semibold">{teacher.average.toFixed(2)}</span>
               </div>
@@ -381,6 +411,13 @@ function buildAnalytics(input: {
     input.completions
   );
   const departmentScores = new Map<string, { total: number; count: number }>();
+  const departmentResponseCounts = new Map<string, number>();
+  input.evaluations.forEach((evaluation) => {
+    departmentResponseCounts.set(
+      evaluation.departmentId,
+      (departmentResponseCounts.get(evaluation.departmentId) ?? 0) + 1
+    );
+  });
   const teacherScores = new Map<string, { total: number; count: number }>();
   const periodScores = new Map<string, { total: number; count: number }>();
   finalEvaluations.forEach((evaluation) => {
@@ -448,7 +485,7 @@ function buildAnalytics(input: {
     }).filter((item) => item.average > 0),
     departmentCounts: input.departments.map((department) => ({
       name: department.name || department.code,
-      evaluations: departmentScores.get(department.id)?.count ?? 0,
+      evaluations: departmentResponseCounts.get(department.id) ?? 0,
     })).filter((item) => item.evaluations > 0),
     trend: input.periods
       .map((period) => {
@@ -465,6 +502,7 @@ function buildAnalytics(input: {
       .map(({ period, average, evaluations }) => ({ period, average, evaluations })),
     topTeachers: [...teacherScores.entries()]
       .map(([teacherId, score]) => ({
+        id: teacherId,
         name: input.teachers.find((teacher) => teacher.id === teacherId)?.displayName ?? "Teacher",
         average: score.total / score.count,
       }))
@@ -482,7 +520,7 @@ function buildAnalytics(input: {
     totalStudents: input.students.length,
     completedStudents,
     pendingStudents,
-    totalEvaluations: finalEvaluations.length,
+    totalEvaluations: input.evaluations.length,
     averageRating: finalEvaluations.length
       ? finalEvaluations.reduce((sum, evaluation) => sum + evaluation.averageScore, 0)
         / finalEvaluations.length
@@ -540,9 +578,19 @@ function ChartPanel({ title, children }: { title: string; children: React.ReactN
   );
 }
 
+function RatingEmptyState() {
+  return (
+    <div className="flex h-[290px] items-center justify-center text-center text-sm text-slate-500">
+      Ratings appear after every student in an assignment completes the evaluation.
+    </div>
+  );
+}
+
 const tooltipStyle = {
-  background: "rgb(15 23 42)",
-  border: "none",
+  backgroundColor: "#0f172a",
+  border: "1px solid #475569",
   borderRadius: 6,
-  color: "white",
+  color: "#f8fafc",
 };
+
+const tooltipTextStyle = { color: "#f8fafc" };

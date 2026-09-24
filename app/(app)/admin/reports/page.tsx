@@ -83,6 +83,7 @@ const emptyFilters: Filters = {
 
 export default function AdminReportsPage() {
   const [mode, setMode] = React.useState<"responses" | "progress">("responses");
+  const [submittedEvaluations, setSubmittedEvaluations] = React.useState<Evaluation[]>([]);
   const [evaluations, setEvaluations] = React.useState<Evaluation[]>([]);
   const [progress, setProgress] = React.useState<ProgressRow[]>([]);
   const [teachers, setTeachers] = React.useState<Teacher[]>([]);
@@ -170,6 +171,7 @@ export default function AdminReportsPage() {
       const finalReportKeys = new Set(finalEvaluationRows.map((evaluation) =>
         `${evaluation.periodId}_${evaluation.teacherId}_${evaluation.subjectId}`
       ));
+      setSubmittedEvaluations(evaluationRows);
       setEvaluations(finalEvaluationRows);
       setTeachers(teacherRows);
       setDepartments(departmentRows);
@@ -193,9 +195,12 @@ export default function AdminReportsPage() {
 
   React.useEffect(() => {
     void load();
+    const refresh = () => void load();
+    window.addEventListener("focus", refresh);
+    return () => window.removeEventListener("focus", refresh);
   }, [load]);
 
-  const filteredEvaluations = React.useMemo(() => evaluations.filter((evaluation) => {
+  const matchesResponseFilters = React.useCallback((evaluation: Evaluation) => {
     const period = periods.find((item) => item.id === evaluation.periodId);
     if (filters.teacherId && evaluation.teacherId !== filters.teacherId) return false;
     if (filters.departmentId && evaluation.departmentId !== filters.departmentId) return false;
@@ -213,12 +218,10 @@ export default function AdminReportsPage() {
       departments.find((item) => item.id === evaluation.departmentId)?.name,
       programs.find((item) => item.id === evaluation.programId)?.code,
       evaluation.yearLevel,
-      evaluation.comment,
       period?.name,
     ].some((value) => value?.toLowerCase().includes(needle));
-  }), [
+  }, [
     departments,
-    evaluations,
     filters,
     periods,
     programs,
@@ -226,6 +229,14 @@ export default function AdminReportsPage() {
     subjects,
     teachers,
   ]);
+  const filteredSubmitted = React.useMemo(
+    () => submittedEvaluations.filter(matchesResponseFilters),
+    [submittedEvaluations, matchesResponseFilters]
+  );
+  const filteredEvaluations = React.useMemo(
+    () => evaluations.filter(matchesResponseFilters),
+    [evaluations, matchesResponseFilters]
+  );
 
   const filteredProgress = React.useMemo(() => progress.filter((row) => {
     const period = periods.find((item) => item.id === row.periodId);
@@ -296,7 +307,7 @@ export default function AdminReportsPage() {
     setBusy(true);
     try {
       if (mode === "responses") {
-        if (filteredEvaluations.length === 0) throw new Error("No anonymous responses match these filters.");
+        if (filteredEvaluations.length === 0) throw new Error("No finalized anonymous responses match these filters.");
         const meta = reportMeta(filters, teachers, departments, periods);
         const lookups = {
           teachers: Object.fromEntries(teachers.map((item) => [item.id, item.displayName])),
@@ -401,6 +412,9 @@ export default function AdminReportsPage() {
         description="Filter anonymous results or student completion records and export PDF or Excel."
         action={
           <div className="flex flex-wrap gap-2">
+            <button type="button" onClick={() => void load()} disabled={loading || busy} className="btn-secondary" title="Refresh reports">
+              <RefreshCcw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} /> Refresh
+            </button>
             <button type="button" onClick={regenerateAnalysis} disabled={busy} className="btn-secondary">
               <RefreshCcw className="h-4 w-4" /> Generate AI analysis
             </button>
@@ -423,7 +437,7 @@ export default function AdminReportsPage() {
         <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
           <div className="relative md:col-span-2 xl:col-span-4">
             <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-            <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search student, teacher, department, Program, year, period, or status" className={`${inputCls} pl-10`} />
+            <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder={mode === "progress" ? "Search student, teacher, subject, or period" : "Search teacher, subject, department, or period"} className={`${inputCls} pl-10`} />
           </div>
           <SelectFilter label="Teacher" value={filters.teacherId} onChange={(teacherId) => setFilters({ ...filters, teacherId })}>
             <option value="">All teachers</option>
@@ -431,7 +445,7 @@ export default function AdminReportsPage() {
           </SelectFilter>
           <SelectFilter label="Department" value={filters.departmentId} onChange={(departmentId) => setFilters({ ...filters, departmentId })}>
             <option value="">All departments</option>
-            {departments.map((department) => <option key={department.id} value={department.id}>{department.code} - {department.name}</option>)}
+            {departments.map((department) => <option key={department.id} value={department.id}>{department.name}</option>)}
           </SelectFilter>
           <SelectFilter label="Program" value={filters.programId} onChange={(programId) => setFilters({ ...filters, programId })}>
             <option value="">All Programs</option>
@@ -464,16 +478,17 @@ export default function AdminReportsPage() {
         <button type="button" onClick={() => { setFilters(emptyFilters); setSearch(""); }} className="mt-3 text-xs font-semibold text-brand-700 dark:text-brand-300">Clear filters</button>
       </section>
 
-      <div className="my-5 grid gap-3 sm:grid-cols-3">
+      <div className="my-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         {mode === "responses" ? (
           <>
-            <Summary label="Anonymous responses" value={filteredEvaluations.length} />
-            <Summary label="Average rating" value={filteredEvaluations.length ? average.toFixed(2) : "—"} />
-            <Summary label="Written comments" value={filteredEvaluations.filter((item) => item.comment?.trim()).length} />
+            <Summary label="Responses received" value={filteredSubmitted.length} />
+            <Summary label="Finalized responses" value={filteredEvaluations.length} />
+            <Summary label="Finalized average rating" value={filteredEvaluations.length ? average.toFixed(2) : "—"} />
+            <Summary label="Finalized comments" value={filteredEvaluations.filter((item) => item.comment?.trim()).length} />
           </>
         ) : (
           <>
-            <Summary label="Assignments" value={filteredProgress.length} />
+            <Summary label="Assigned student evaluations" value={filteredProgress.length} />
             <Summary label="Completed" value={completed} />
             <Summary label="Pending" value={pending} />
           </>
@@ -490,14 +505,21 @@ export default function AdminReportsPage() {
       )}
 
       {mode === "responses" ? (
-        <ResponsePreview
-          rows={filteredEvaluations}
-          teachers={teachers}
-          subjects={subjects}
-          programs={programs}
-          periods={periods}
-          loading={loading}
-        />
+        <>
+          {!loading && filteredSubmitted.length > filteredEvaluations.length && (
+            <p className="mb-3 text-sm text-slate-500">
+              Scores and comments appear below only after every assigned student has submitted for that teacher and subject.
+            </p>
+          )}
+          <ResponsePreview
+            rows={filteredEvaluations}
+            teachers={teachers}
+            subjects={subjects}
+            programs={programs}
+            periods={periods}
+            loading={loading}
+          />
+        </>
       ) : (
         <ProgressPreview
           rows={filteredProgress}
@@ -529,18 +551,17 @@ function buildProgressRows(
   assignments.forEach((assignment) => {
     assignment.studentIds.forEach((studentId) => {
       const student = studentMap.get(studentId);
-      if (!student) return;
       const id = `${studentId}_${assignment.id}`;
       if (rows.has(id)) return;
       const completion = completionMap.get(id);
       rows.set(id, {
         id,
         studentId,
-        studentName: student.displayName,
-        studentEmail: student.email,
-        programId: student.programId,
-        yearLevel: student.yearLevel,
-        section: student.section,
+        studentName: student?.displayName ?? "Student record unavailable",
+        studentEmail: student?.email ?? "",
+        programId: student?.programId ?? completion?.programId ?? assignment.programIds?.[0] ?? "",
+        yearLevel: student?.yearLevel ?? completion?.yearLevel ?? assignment.yearLevels?.[0] ?? "",
+        section: student?.section ?? completion?.section ?? assignment.sections?.[0] ?? "",
         teacherId: assignment.teacherId,
         subjectId: assignment.subjectId,
         departmentId: assignment.departmentId,
@@ -662,7 +683,7 @@ function ResponsePreview({
         </thead>
         <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
           {loading ? <tr><td colSpan={6} className="px-4 py-10 text-center text-slate-500">Loading reports...</td></tr>
-            : rows.length === 0 ? <tr><td colSpan={6} className="px-4 py-10 text-center text-slate-500">No responses match these filters.</td></tr>
+            : rows.length === 0 ? <tr><td colSpan={6} className="px-4 py-10 text-center text-slate-500">No finalized responses match these filters.</td></tr>
               : rows.slice(0, 100).map((row) => (
                 <tr key={row.id}>
                   <td className="px-4 py-3 font-medium">{teachers.find((item) => item.id === row.teacherId)?.displayName ?? "Teacher"}</td>
