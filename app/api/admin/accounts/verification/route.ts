@@ -40,8 +40,14 @@ export async function POST(request: Request) {
       displayName: String(profile.displayName ?? account.displayName ?? "Staff member"),
       context: "staff",
     });
-    if (delivery === "unavailable") {
-      throw new ApiError(503, "Verification email could not be sent. Check SMTP settings and server logs, then retry.");
+    if (delivery === "rate_limited") {
+      throw new ApiError(429, "Firebase temporarily blocked verification-link requests. No email was sent. Wait before trying again.");
+    }
+    if (delivery === "link_unavailable") {
+      throw new ApiError(503, "Firebase could not create a verification link. No email was sent. Check the server logs.");
+    }
+    if (delivery === "smtp_unavailable") {
+      throw new ApiError(503, "The verification email could not be delivered by SMTP. Check SMTP settings and server logs.");
     }
     return NextResponse.json({ delivery });
   } catch (error) {

@@ -11,6 +11,7 @@ import { writeAuditLog } from "@/lib/server/audit";
 import { ApiError, requireAdmin } from "@/lib/server/require-admin";
 import {
   generateWbtesVerificationLink,
+  isVerificationRateLimited,
   verificationSignInUrl,
 } from "@/lib/server/verification-email";
 import type { AppUser, UserRole } from "@/lib/types";
@@ -108,7 +109,9 @@ export async function POST(request: Request) {
         });
         emailed = true;
       } catch (error) {
-        warning = error instanceof Error ? error.message : "Verification email failed.";
+        warning = isVerificationRateLimited(error)
+          ? "Firebase temporarily blocked verification-link requests. No email was sent; try again later."
+          : error instanceof Error ? error.message : "Verification email failed.";
       }
     } else if (requiresVerification) {
       warning = "Staff account created, but SMTP is not configured for the verification email.";
@@ -211,7 +214,9 @@ export async function PATCH(request: Request) {
             ].join("\n"),
           });
         } catch (error) {
-          warning = error instanceof Error ? error.message : "Staff verification email failed.";
+          warning = isVerificationRateLimited(error)
+            ? "Firebase temporarily blocked verification-link requests. No email was sent; try again later."
+            : error instanceof Error ? error.message : "Staff verification email failed.";
         }
       } else {
         warning = "The staff role changed, but SMTP is not configured for the verification email.";

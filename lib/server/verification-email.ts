@@ -6,7 +6,9 @@ import { isSmtpConfigured, sendSmtpEmail } from "@/lib/email/smtp";
 export type VerificationDelivery =
   | "sent"
   | "recent"
-  | "unavailable";
+  | "rate_limited"
+  | "link_unavailable"
+  | "smtp_unavailable";
 
 type VerificationContext = "student" | "staff";
 
@@ -41,6 +43,13 @@ export async function generateWbtesVerificationLink(
   return buildHostedVerificationLink(await firebaseLink, context);
 }
 
+export function isVerificationRateLimited(error: unknown) {
+  const code = (error as { code?: string } | null)?.code;
+  const message = error instanceof Error ? error.message : "";
+  return code === "auth/too-many-requests"
+    || message.includes("TOO_MANY_ATTEMPTS_TRY_LATER");
+}
+
 export async function deliverVerificationEmail(
   _request: Request,
   input: {
@@ -50,7 +59,7 @@ export async function deliverVerificationEmail(
     context?: VerificationContext;
   }
 ): Promise<VerificationDelivery> {
-  if (!isSmtpConfigured()) return "unavailable";
+  if (!isSmtpConfigured()) return "smtp_unavailable";
 
   const deliveryRef = adminDb
     .collection("verificationDeliveries")
@@ -61,13 +70,19 @@ export async function deliverVerificationEmail(
     return "recent";
   }
 
+  const signInUrl = verificationSignInUrl();
+  let verificationLink: string;
   try {
-    const signInUrl = verificationSignInUrl();
-    const verificationLink = await generateWbtesVerificationLink(
+    verificationLink = await generateWbtesVerificationLink(
       input.email,
       input.context ?? "staff"
     );
+  } catch (error) {
+    console.warn("Verification link generation failed:", error);
+    return isVerificationRateLimited(error) ? "rate_limited" : "link_unavailable";
+  }
 
+  try {
     await sendSmtpEmail({
       to: input.email,
       subject: "Verify your WBTE email address",
@@ -84,16 +99,21 @@ export async function deliverVerificationEmail(
         "If you did not request this verification, you can ignore this message.",
       ].join("\n"),
     });
+  } catch (error) {
+    console.warn("Verification SMTP delivery failed:", error);
+    return "smtp_unavailable";
+  }
+
+  try {
     await deliveryRef.set({
       email: input.email,
       lastSentAt: Date.now(),
       updatedAt: Date.now(),
     }, { merge: true });
-    return "sent";
   } catch (error) {
-    console.warn("Verification email delivery failed:", error);
-    return "unavailable";
+    console.warn("Verification delivery record could not be saved:", error);
   }
+  return "sent";
 }
 
 function buildHostedVerificationLink(

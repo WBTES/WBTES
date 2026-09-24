@@ -129,6 +129,8 @@ export async function POST(request: Request) {
         ? "A new verification link was sent to your inbox."
         : delivery === "recent"
           ? "A verification link was sent recently; check your inbox and spam folder."
+          : delivery === "rate_limited"
+            ? "Firebase temporarily blocked new verification links. Wait before trying again or use a link already in your inbox."
           : "Open the verification email issued for your account or contact an administrator.";
       throw new ApiError(
         403,
