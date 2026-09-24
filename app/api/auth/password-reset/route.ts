@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { NextResponse } from "next/server";
-import { isSmtpConfigured, sendSmtpEmail } from "@/lib/email/smtp";
+import { isSmtpConfigured, sendSmtpEmail, SmtpSendingLimitError } from "@/lib/email/smtp";
 import { adminAuth, adminDb, adminReady } from "@/lib/firebase/admin";
 import { normalizeEmail } from "@/lib/server/api-response";
 
@@ -79,7 +79,9 @@ export async function POST(request: Request) {
       }
     }
     return NextResponse.json(
-      { error: "Could not send the reset email right now. Please try again later." },
+      { error: error instanceof SmtpSendingLimitError
+        ? "The email provider's daily sending limit has been reached. Please try again later or contact an administrator."
+        : "Could not send the reset email right now. Please try again later." },
       { status: 503 }
     );
   }

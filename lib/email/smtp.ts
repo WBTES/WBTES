@@ -9,6 +9,13 @@ export type EmailMessage = {
   replyTo?: string;
 };
 
+export class SmtpSendingLimitError extends Error {
+  constructor() {
+    super("Email provider sending limit reached.");
+    this.name = "SmtpSendingLimitError";
+  }
+}
+
 function smtpConfig() {
   const host = process.env.SMTP_HOST?.trim() ?? "";
   const port = Number(process.env.SMTP_PORT ?? "587");
@@ -63,9 +70,15 @@ export async function sendSmtpEmails(messages: EmailMessage[]) {
           text: message.text,
         }))
       );
-      const failures = results.filter((result) => result.status === "rejected").length;
-      sent += results.length - failures;
-      failed += failures;
+      const failures = results.filter((result): result is PromiseRejectedResult => result.status === "rejected");
+      sent += results.length - failures.length;
+      failed += failures.length;
+      if (failures.some((failure) => {
+        const response = (failure.reason as { response?: unknown } | null)?.response;
+        return typeof response === "string" && /daily user sending limit exceeded/i.test(response);
+      })) {
+        throw new SmtpSendingLimitError();
+      }
     }
   } finally {
     transporter.close();
