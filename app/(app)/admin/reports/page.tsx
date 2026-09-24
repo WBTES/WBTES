@@ -95,9 +95,13 @@ export default function AdminReportsPage() {
   const [filters, setFilters] = React.useState<Filters>(emptyFilters);
   const [search, setSearch] = React.useState("");
   const [loading, setLoading] = React.useState(true);
+  const [hasLoaded, setHasLoaded] = React.useState(false);
   const [busy, setBusy] = React.useState(false);
+  const loadInProgress = React.useRef(false);
 
   const load = React.useCallback(async () => {
+    if (loadInProgress.current) return;
+    loadInProgress.current = true;
     setLoading(true);
     try {
       const [
@@ -186,9 +190,11 @@ export default function AdminReportsPage() {
         assignmentRows,
         completionRows
       ));
+      setHasLoaded(true);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Report data could not be loaded.");
     } finally {
+      loadInProgress.current = false;
       setLoading(false);
     }
   }, []);
@@ -403,6 +409,8 @@ export default function AdminReportsPage() {
     ? filteredEvaluations.reduce((sum, evaluation) => sum + evaluation.averageScore, 0)
       / filteredEvaluations.length
     : 0;
+  const submittedComments = filteredSubmitted.filter((item) => item.comment?.trim());
+  const initialLoading = loading && !hasLoaded;
   const academicYears = Array.from(new Set(periods.map((period) => period.academicYear))).sort();
 
   return (
@@ -481,16 +489,16 @@ export default function AdminReportsPage() {
       <div className="my-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         {mode === "responses" ? (
           <>
-            <Summary label="Responses received" value={filteredSubmitted.length} />
-            <Summary label="Finalized responses" value={filteredEvaluations.length} />
-            <Summary label="Finalized average rating" value={filteredEvaluations.length ? average.toFixed(2) : "—"} />
-            <Summary label="Finalized comments" value={filteredEvaluations.filter((item) => item.comment?.trim()).length} />
+            <Summary label="Responses received" value={initialLoading ? "..." : filteredSubmitted.length} />
+            <Summary label="Finalized responses" value={initialLoading ? "..." : filteredEvaluations.length} />
+            <Summary label="Finalized average rating" value={initialLoading ? "..." : filteredEvaluations.length ? average.toFixed(2) : "—"} />
+            <Summary label="Written comments received" value={initialLoading ? "..." : submittedComments.length} />
           </>
         ) : (
           <>
-            <Summary label="Assigned student evaluations" value={filteredProgress.length} />
-            <Summary label="Completed" value={completed} />
-            <Summary label="Pending" value={pending} />
+            <Summary label="Assigned student evaluations" value={initialLoading ? "..." : filteredProgress.length} />
+            <Summary label="Completed" value={initialLoading ? "..." : completed} />
+            <Summary label="Pending" value={initialLoading ? "..." : pending} />
           </>
         )}
       </div>
@@ -506,18 +514,26 @@ export default function AdminReportsPage() {
 
       {mode === "responses" ? (
         <>
-          {!loading && filteredSubmitted.length > filteredEvaluations.length && (
+          <AnonymousCommentsPreview
+            rows={submittedComments}
+            teachers={teachers}
+            subjects={subjects}
+            periods={periods}
+            loading={initialLoading}
+          />
+          {!initialLoading && filteredSubmitted.length > filteredEvaluations.length && (
             <p className="mb-3 text-sm text-slate-500">
-              Scores and comments appear below only after every assigned student has submitted for that teacher and subject.
+              Ratings appear after every assigned student has submitted for that teacher and subject.
             </p>
           )}
+          <h2 className="mb-3 text-sm font-semibold">Finalized ratings</h2>
           <ResponsePreview
             rows={filteredEvaluations}
             teachers={teachers}
             subjects={subjects}
             programs={programs}
             periods={periods}
-            loading={loading}
+            loading={initialLoading}
           />
         </>
       ) : (
@@ -527,7 +543,7 @@ export default function AdminReportsPage() {
           subjects={subjects}
           programs={programs}
           periods={periods}
-          loading={loading}
+          loading={initialLoading}
         />
       )}
     </div>
@@ -677,13 +693,13 @@ function ResponsePreview({
 }) {
   return (
     <div className="overflow-x-auto rounded-lg border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900">
-      <table className="w-full min-w-[900px] text-sm">
+      <table className="w-full min-w-[760px] text-sm">
         <thead className="bg-slate-50 text-left text-xs uppercase text-slate-500 dark:bg-slate-800/60">
-          <tr><th className="px-4 py-3">Teacher</th><th className="px-4 py-3">Subject</th><th className="px-4 py-3">Program / Year</th><th className="px-4 py-3">Period</th><th className="px-4 py-3">Score</th><th className="px-4 py-3">Anonymous comment</th></tr>
+          <tr><th className="px-4 py-3">Teacher</th><th className="px-4 py-3">Subject</th><th className="px-4 py-3">Program / Year</th><th className="px-4 py-3">Period</th><th className="px-4 py-3">Score</th></tr>
         </thead>
         <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-          {loading ? <tr><td colSpan={6} className="px-4 py-10 text-center text-slate-500">Loading reports...</td></tr>
-            : rows.length === 0 ? <tr><td colSpan={6} className="px-4 py-10 text-center text-slate-500">No finalized responses match these filters.</td></tr>
+          {loading ? <tr><td colSpan={5} className="px-4 py-10 text-center text-slate-500">Loading reports...</td></tr>
+            : rows.length === 0 ? <tr><td colSpan={5} className="px-4 py-10 text-center text-slate-500">No finalized responses match these filters.</td></tr>
               : rows.slice(0, 100).map((row) => (
                 <tr key={row.id}>
                   <td className="px-4 py-3 font-medium">{teachers.find((item) => item.id === row.teacherId)?.displayName ?? "Teacher"}</td>
@@ -691,12 +707,57 @@ function ResponsePreview({
                   <td className="px-4 py-3">{programs.find((item) => item.id === row.programId)?.code ?? row.course ?? "—"} / {row.yearLevel || "—"}</td>
                   <td className="px-4 py-3">{periods.find((item) => item.id === row.periodId)?.name ?? "Period"}</td>
                   <td className="px-4 py-3 font-semibold">{row.averageScore.toFixed(2)}</td>
-                  <td className="max-w-xs truncate px-4 py-3">{row.comment || "—"}</td>
                 </tr>
               ))}
         </tbody>
       </table>
     </div>
+  );
+}
+
+function AnonymousCommentsPreview({
+  rows,
+  teachers,
+  subjects,
+  periods,
+  loading,
+}: {
+  rows: Evaluation[];
+  teachers: Teacher[];
+  subjects: Subject[];
+  periods: EvaluationPeriod[];
+  loading: boolean;
+}) {
+  return (
+    <section className="mb-6">
+      <h2 className="mb-3 text-sm font-semibold">Anonymous comments</h2>
+      <div className="max-h-[480px] overflow-auto rounded-lg border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900">
+        <table className="w-full min-w-[680px] text-sm">
+          <thead className="sticky top-0 bg-slate-50 text-left text-xs uppercase text-slate-500 dark:bg-slate-800">
+            <tr>
+              <th className="px-4 py-3">Teacher</th>
+              <th className="px-4 py-3">Subject</th>
+              <th className="px-4 py-3">Period</th>
+              <th className="px-4 py-3">Comment</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+            {loading ? (
+              <tr><td colSpan={4} className="px-4 py-8 text-center text-slate-500">Loading comments...</td></tr>
+            ) : rows.length === 0 ? (
+              <tr><td colSpan={4} className="px-4 py-8 text-center text-slate-500">No written comments match these filters.</td></tr>
+            ) : rows.map((row) => (
+              <tr key={row.id}>
+                <td className="px-4 py-3 font-medium">{teachers.find((item) => item.id === row.teacherId)?.displayName ?? "Teacher"}</td>
+                <td className="px-4 py-3">{subjects.find((item) => item.id === row.subjectId)?.name ?? "Subject"}</td>
+                <td className="px-4 py-3">{periods.find((item) => item.id === row.periodId)?.name ?? "Period"}</td>
+                <td className="max-w-xl whitespace-pre-wrap break-words px-4 py-3">{row.comment?.trim()}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </section>
   );
 }
 
