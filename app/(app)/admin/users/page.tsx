@@ -4,6 +4,7 @@ import * as React from "react";
 import {
   Building2,
   Eye,
+  Mail,
   Power,
   Search,
   ShieldCheck,
@@ -95,6 +96,7 @@ export default function AdminUsersPage() {
   const [departments, setDepartments] = React.useState<Department[]>([]);
   const [loading, setLoading] = React.useState(true);
   const [saving, setSaving] = React.useState(false);
+  const [sendingVerificationUid, setSendingVerificationUid] = React.useState("");
   const [studentOpen, setStudentOpen] = React.useState(false);
   const [staffOpen, setStaffOpen] = React.useState(false);
   const [profileStudent, setProfileStudent] = React.useState<ManagedStudent | null>(null);
@@ -297,8 +299,12 @@ export default function AdminUsersPage() {
           ...staffForm,
         }),
       });
-      const result = await readApiResponse<{ warning?: string }>(response);
-      toast.success(editingStaff ? "Staff account updated" : "Staff account created");
+      const result = await readApiResponse<{ warning?: string; emailed?: boolean }>(response);
+      toast.success(editingStaff
+        ? "Staff account updated"
+        : result.emailed
+          ? "Staff account created; verification email sent"
+          : "Staff account created");
       if (result.warning) toast.error(result.warning, { duration: 7000 });
       setStaffOpen(false);
       await load();
@@ -321,6 +327,29 @@ export default function AdminUsersPage() {
       await load();
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Staff deletion failed.");
+    }
+  };
+
+  const resendStaffVerification = async (account: AppUser) => {
+    setSendingVerificationUid(account.uid);
+    try {
+      const response = await authenticatedFetch("/api/admin/accounts/verification", {
+        method: "POST",
+        body: JSON.stringify({ uid: account.uid }),
+      });
+      const result = await readApiResponse<{ delivery: "sent" | "recent" | "verified" }>(response);
+      if (result.delivery === "verified") {
+        toast.success("This staff email is already verified");
+        await load();
+      } else if (result.delivery === "recent") {
+        toast("A verification email was sent recently. Check the inbox and spam folder.");
+      } else {
+        toast.success(`Verification email sent to ${account.email}`);
+      }
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Verification email could not be sent.");
+    } finally {
+      setSendingVerificationUid("");
     }
   };
 
@@ -422,6 +451,8 @@ export default function AdminUsersPage() {
         <StaffTable
           rows={visibleStaff}
           loading={loading}
+          sendingVerificationUid={sendingVerificationUid}
+          onResendVerification={resendStaffVerification}
           onEdit={openStaffEdit}
           onDelete={deleteStaff}
         />
@@ -543,11 +574,15 @@ function StudentTable({
 function StaffTable({
   rows,
   loading,
+  sendingVerificationUid,
+  onResendVerification,
   onEdit,
   onDelete,
 }: {
   rows: AppUser[];
   loading: boolean;
+  sendingVerificationUid: string;
+  onResendVerification: (account: AppUser) => void;
   onEdit: (account: AppUser) => void;
   onDelete: (account: AppUser) => void;
 }) {
@@ -576,9 +611,21 @@ function StaffTable({
               </td>
               <td className="px-4 py-3">{account.username ?? "—"}</td>
               <td className="px-4 py-3">{formatRoleLabel(account.role)}</td>
-              <td className="px-4 py-3"><StatusBadge status={account.status ?? "active"} /></td>
+              <td className="px-4 py-3">
+                <StatusBadge status={account.status ?? "active"} />
+                {(account.role === "hr" || account.role === "department_head") && !account.emailVerified && (
+                  <span className="ml-2 text-xs text-amber-600 dark:text-amber-400">Email unverified</span>
+                )}
+              </td>
               <td className="px-4 py-3">
                 <div className="flex justify-end gap-1">
+                  {(account.role === "hr" || account.role === "department_head") && !account.emailVerified && (
+                    <IconButton
+                      label="Resend verification email"
+                      disabled={Boolean(sendingVerificationUid) || account.status === "disabled"}
+                      onClick={() => onResendVerification(account)}
+                    ><Mail className="h-4 w-4" /></IconButton>
+                  )}
                   <IconButton label="Edit staff account" onClick={() => onEdit(account)}><UserRound className="h-4 w-4" /></IconButton>
                   {account.role === "admin" ? (
                     <span
@@ -837,11 +884,13 @@ function StatusBadge({ status }: { status: "pending" | "active" | "disabled" }) 
 function IconButton({
   label,
   danger = false,
+  disabled = false,
   onClick,
   children,
 }: {
   label: string;
   danger?: boolean;
+  disabled?: boolean;
   onClick: () => void;
   children: React.ReactNode;
 }) {
@@ -850,8 +899,9 @@ function IconButton({
       type="button"
       title={label}
       aria-label={label}
+      disabled={disabled}
       onClick={onClick}
-      className={`rounded-md p-2 ${danger ? "text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-500/10" : "text-slate-500 hover:bg-slate-100 hover:text-brand-700 dark:hover:bg-slate-800"}`}
+      className={`rounded-md p-2 disabled:cursor-not-allowed disabled:opacity-50 ${danger ? "text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-500/10" : "text-slate-500 hover:bg-slate-100 hover:text-brand-700 dark:hover:bg-slate-800"}`}
     >
       {children}
     </button>
