@@ -20,7 +20,7 @@ export default function ForgotPasswordPage() {
     try {
       await resetPassword(email.trim());
       setDone(true);
-      toast.success("Password reset email requested");
+      toast.success("Check your inbox for a reset link");
     } catch (error: unknown) {
       toast.error(getAuthErrorMessage(error, "Password reset failed."));
     } finally {
@@ -36,7 +36,7 @@ export default function ForgotPasswordPage() {
           title="Return to your WBTE workspace"
           description="Request a secure reset link for the email address connected to your account."
           points={[
-            "The reset link is sent through Firebase Authentication",
+            "A secure reset link is sent to your account email",
             "Your assigned role and existing records remain unchanged",
             "Return to sign in after choosing a new password",
           ]}
@@ -51,8 +51,8 @@ export default function ForgotPasswordPage() {
                 </span>
                 <h1 className="mt-4 text-2xl font-bold text-slate-950 dark:text-white">Check your inbox</h1>
                 <p className="mt-2 text-sm leading-relaxed text-slate-600 dark:text-slate-400">
-                  A password reset link was requested for <strong>{email}</strong>. Check the spam
-                  folder if it does not arrive shortly.
+                  If an account exists for <strong>{email}</strong>, a password reset link will arrive
+                  shortly. Check your spam folder too.
                 </p>
                 <Link href="/login" className="btn-primary mt-6 w-full py-3 text-sm">
                   Back to sign in
@@ -66,7 +66,7 @@ export default function ForgotPasswordPage() {
                 </div>
                 <h1 className="mt-3 text-2xl font-bold text-slate-950 dark:text-white">Reset your password</h1>
                 <p className="mt-2 text-sm leading-relaxed text-slate-600 dark:text-slate-400">
-                  Enter your account email and Firebase will send the reset link.
+                  Enter your account email to request a secure reset link.
                 </p>
 
                 {!configured && (

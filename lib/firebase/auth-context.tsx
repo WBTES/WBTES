@@ -5,7 +5,6 @@ import {
   GoogleAuthProvider,
   onAuthStateChanged,
   sendEmailVerification,
-  sendPasswordResetEmail,
   signInWithEmailAndPassword,
   signInWithCustomToken,
   signInWithPopup,
@@ -193,7 +192,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const resetPassword = React.useCallback(async (email: string) => {
-    await sendPasswordResetEmail(auth, email.trim().toLowerCase());
+    const response = await fetch("/api/auth/password-reset", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email: email.trim().toLowerCase() }),
+    });
+    if (!response.ok) {
+      const data = await response.json() as { error?: string };
+      throw new Error(data.error ?? "Password reset failed. Please try again later.");
+    }
   }, []);
 
   const resendVerification = React.useCallback(async () => {
