@@ -47,7 +47,12 @@ export async function POST(request: Request) {
       throw new ApiError(429, "A verification request is already in progress. Wait a moment before trying again.");
     }
     if (delivery === "link_unavailable") {
-      throw new ApiError(503, "Firebase could not create a verification link. No email was sent. Check the server logs.");
+      const deliveryStatus = await adminDb.collection("verificationDeliveries").doc(uid).get();
+      const code = deliveryStatus.data()?.lastErrorCode;
+      const detail = typeof code === "string" && /^auth\/[a-z-]+$/.test(code)
+        ? ` (${code})`
+        : "";
+      throw new ApiError(503, `Firebase could not create a verification link${detail}. No email was sent. Check the server logs.`);
     }
     if (delivery === "smtp_unavailable") {
       throw new ApiError(503, "The verification email could not be delivered by SMTP. Check SMTP settings and server logs.");

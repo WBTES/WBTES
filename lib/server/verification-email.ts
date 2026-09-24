@@ -41,10 +41,20 @@ export async function generateWbtesVerificationLink(
   context: VerificationContext = "student"
 ) {
   const signInUrl = verificationSignInUrl();
-  const firebaseLink = signInUrl
-    ? adminAuth.generateEmailVerificationLink(email, { url: signInUrl })
-    : adminAuth.generateEmailVerificationLink(email);
-  return buildHostedVerificationLink(await firebaseLink, context);
+  let firebaseLink: string;
+  try {
+    firebaseLink = signInUrl
+      ? await adminAuth.generateEmailVerificationLink(email, { url: signInUrl })
+      : await adminAuth.generateEmailVerificationLink(email);
+  } catch (error) {
+    const code = (error as { code?: string } | null)?.code;
+    if (!signInUrl || !["auth/invalid-continue-uri", "auth/unauthorized-continue-uri"].includes(code ?? "")) {
+      throw error;
+    }
+    console.warn("Verification return URL was rejected by Firebase; using its hosted confirmation page.");
+    firebaseLink = await adminAuth.generateEmailVerificationLink(email);
+  }
+  return buildHostedVerificationLink(firebaseLink, context);
 }
 
 export function isVerificationRateLimited(error: unknown) {
@@ -95,13 +105,14 @@ export async function deliverVerificationEmail(
     return "link_unavailable";
   }
 
-  async function finish(result: VerificationDelivery, cooldownMs: number) {
+  async function finish(result: VerificationDelivery, cooldownMs: number, errorCode: string | null = null) {
     try {
       await adminDb.runTransaction(async (transaction) => {
         const delivery = await transaction.get(deliveryRef);
         if (delivery.data()?.attemptId !== attemptId) return;
         transaction.set(deliveryRef, {
           lastResult: result,
+          lastErrorCode: errorCode,
           nextAllowedAt: Date.now() + cooldownMs,
           ...(result === "sent" ? { lastSentAt: Date.now() } : {}),
           updatedAt: Date.now(),
@@ -122,9 +133,13 @@ export async function deliverVerificationEmail(
     );
   } catch (error) {
     console.warn("Verification link generation failed:", error);
+    const rawCode = (error as { code?: unknown } | null)?.code;
+    const errorCode = typeof rawCode === "string" && /^auth\/[a-z-]+$/.test(rawCode)
+      ? rawCode
+      : "unknown";
     return isVerificationRateLimited(error)
-      ? finish("rate_limited", 60 * 60_000)
-      : finish("link_unavailable", 5 * 60_000);
+      ? finish("rate_limited", 60 * 60_000, errorCode)
+      : finish("link_unavailable", 5 * 60_000, errorCode);
   }
 
   try {
