@@ -1,17 +1,19 @@
 import { reportableEvaluations } from "./evaluation-results";
+import { buildReportParticipation, type ReportParticipation } from "./report-participation";
 import type { Department, Evaluation, EvaluationCompletion, EvaluationPeriod, Teacher, TeacherAssignment } from "./types";
 
 export type AnalyticsData = {
   departmentAverages: Array<{ id: string; name: string; average: number | null; responses: number }>;
   departmentCounts: Array<{ id: string; name: string; evaluations: number }>;
   trend: Array<{ period: string; average: number | null; evaluations: number }>;
-  topTeachers: Array<{ id: string; name: string; average: number | null; responses: number }>;
+  topTeachers: Array<{ id: string; name: string; average: number | null; responses: number; preliminaryAverage?: number | null; preliminaryResponses?: number }>;
   completionByDepartment: Array<{ id: string; department: string; completed: number; pending: number; rate: number }>;
   completedStudents: number;
   pendingStudents: number;
   totalEvaluations: number;
   releasedEvaluations: number;
   averageRating: number | null;
+  participation: ReportParticipation[];
 };
 
 type AnalyticsInput = {
@@ -23,6 +25,7 @@ type AnalyticsInput = {
   periods: EvaluationPeriod[];
   releasedPeriodIds?: ReadonlySet<string>;
   minimumResponses?: number;
+  includePreliminaryRatings?: boolean;
 };
 
 export function buildAnalytics(input: AnalyticsInput): AnalyticsData {
@@ -49,6 +52,7 @@ export function buildAnalytics(input: AnalyticsInput): AnalyticsData {
   type Score = { total: number; count: number };
   const departmentScores = new Map<string, Score>();
   const teacherScores = new Map<string, Score>();
+  const preliminaryScores = new Map<string, Score>();
   const periodScores = new Map<string, Score>();
   const addScore = (map: Map<string, Score>, id: string, value: number) => {
     const score = map.get(id) ?? { total: 0, count: 0 };
@@ -58,18 +62,25 @@ export function buildAnalytics(input: AnalyticsInput): AnalyticsData {
   };
   const average = (score?: Score) => score && score.count >= minimumResponses
     ? Number((score.total / score.count).toFixed(2)) : null;
+  if (input.includePreliminaryRatings) {
+    input.evaluations.forEach((evaluation) => {
+      if (Number.isFinite(evaluation.averageScore) && evaluation.averageScore >= 1 && evaluation.averageScore <= 5) {
+        addScore(preliminaryScores, evaluation.teacherId, evaluation.averageScore);
+      }
+    });
+  }
   finalEvaluations.forEach((evaluation) => {
     addScore(departmentScores, departmentFor(evaluation), evaluation.averageScore);
     addScore(teacherScores, evaluation.teacherId, evaluation.averageScore);
     addScore(periodScores, evaluation.periodId, evaluation.averageScore);
   });
 
-  const slots = new Map<string, { studentId: string; departmentId: string; completed: boolean }>();
+  const slots = new Map<string, { studentId: string; teacherId: string; subjectId: string; periodId: string; departmentId: string; completed: boolean }>();
   const slotKey = (assignmentId: string, studentId: string) => JSON.stringify([assignmentId, studentId]);
   input.assignments.forEach((assignment) => {
     const departmentId = departmentFor({ ...assignment, assignmentId: assignment.id });
     (assignment.studentIds ?? []).forEach((studentId) => {
-      slots.set(slotKey(assignment.id, studentId), { studentId, departmentId, completed: false });
+      slots.set(slotKey(assignment.id, studentId), { studentId, teacherId: assignment.teacherId, subjectId: assignment.subjectId, periodId: assignment.periodId, departmentId, completed: false });
     });
   });
   input.completions.forEach((completion) => {
@@ -103,14 +114,23 @@ export function buildAnalytics(input: AnalyticsInput): AnalyticsData {
     trend: [...input.periods].sort((a, b) => a.endDate - b.endDate)
       .filter((period) => periodScores.has(period.id))
       .map((period) => ({ period: period.name, average: average(periodScores.get(period.id)), evaluations: periodScores.get(period.id)?.count ?? 0 })),
-    topTeachers: [...teacherCounts].map(([id, responses]) => ({
-      id, name: teachers.get(id)?.displayName ?? "Archived teacher", responses, average: average(teacherScores.get(id)),
-    })).sort((a, b) => (b.average ?? -1) - (a.average ?? -1) || a.name.localeCompare(b.name)),
+    topTeachers: [...teacherCounts].map(([id, responses]) => {
+      const releasedAverage = average(teacherScores.get(id));
+      const preliminary = preliminaryScores.get(id);
+      return {
+        id, name: teachers.get(id)?.displayName ?? "Archived teacher", responses, average: releasedAverage,
+        ...(input.includePreliminaryRatings && releasedAverage === null ? {
+          preliminaryAverage: preliminary ? Number((preliminary.total / preliminary.count).toFixed(2)) : null,
+          preliminaryResponses: preliminary?.count ?? 0,
+        } : {}),
+      };
+    }).sort((a, b) => (b.average ?? -1) - (a.average ?? -1) || a.name.localeCompare(b.name)),
     completedStudents: [...studentProgress.values()].filter((item) => item.completed === item.assigned).length,
     pendingStudents: [...studentProgress.values()].filter((item) => item.completed < item.assigned).length,
     totalEvaluations: input.evaluations.length,
     releasedEvaluations: finalEvaluations.length,
     averageRating: average({ total: finalEvaluations.reduce((sum, item) => sum + item.averageScore, 0), count: finalEvaluations.length }),
+    participation: buildReportParticipation(input.evaluations.map((evaluation) => ({ ...evaluation, departmentId: departmentFor(evaluation) })), [...slots].map(([id, slot]) => ({ ...slot, id, status: slot.completed ? "completed" : "pending" }))),
   };
 }
 

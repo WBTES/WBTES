@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { AlertTriangle, Plus, Calendar, Eye, Play, StopCircle, Trash2 } from "lucide-react";
+import { AlertTriangle, Plus, Calendar, Eye, Play, RotateCcw, StopCircle, Trash2 } from "lucide-react";
 import { collection, onSnapshot, addDoc, updateDoc, doc, query, orderBy } from "firebase/firestore";
 import { db, firebaseReady } from "@/lib/firebase/client";
 import { useAuth } from "@/lib/firebase/auth-context";
@@ -48,6 +48,8 @@ export default function AdminPeriodsPage() {
   });
   const [loading, setLoading] = React.useState(false);
   const [changingStatus, setChangingStatus] = React.useState<string | null>(null);
+  const [reopeningPeriod, setReopeningPeriod] = React.useState<EvaluationPeriod | null>(null);
+  const [reopenEndDate, setReopenEndDate] = React.useState("");
   const [forceDeletePeriod, setForceDeletePeriod] = React.useState<EvaluationPeriod | null>(null);
   const [deleteConfirmation, setDeleteConfirmation] = React.useState("");
   const [deleting, setDeleting] = React.useState(false);
@@ -150,7 +152,7 @@ export default function AdminPeriodsPage() {
     }
   };
 
-  const onStatus = async (p: EvaluationPeriod, status: PeriodStatus) => {
+  const onStatus = async (p: EvaluationPeriod, status: PeriodStatus, endDate?: number) => {
     if (status !== "open" && status !== "closed") return;
     if (status === "closed" && !confirm(`Close ${p.name} and generate its reports?`)) return;
     setChangingStatus(p.id);
@@ -163,7 +165,7 @@ export default function AdminPeriodsPage() {
           Authorization: `Bearer ${token}`,
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ periodId: p.id, status }),
+        body: JSON.stringify({ periodId: p.id, status, endDate }),
       });
       const data = await response.json() as {
         error?: string;
@@ -181,7 +183,7 @@ export default function AdminPeriodsPage() {
         toast.success(`Period is already ${status}.`);
       } else if (status === "open") {
         toast.success(
-          `Period opened: ${data.notified ?? 0} notified, ${data.emailed ?? 0} emailed.`
+          `Period ${p.status === "closed" ? "reopened" : "opened"}: ${data.notified ?? 0} notified, ${data.emailed ?? 0} emailed.`
         );
       } else {
         toast.success(
@@ -192,10 +194,27 @@ export default function AdminPeriodsPage() {
         toast.error(warning, { duration: 8000 });
       });
       requestAdminNavigationRefresh();
+      return true;
     } catch (err: unknown) {
       toast.error(err instanceof Error ? err.message : "Status update failed");
+      return false;
     } finally {
       setChangingStatus(null);
+    }
+  };
+
+  const onReopen = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!reopeningPeriod || changingStatus !== null) return;
+    const endDate = reopenEndDate === toDateTimeLocal(reopeningPeriod.endDate)
+      ? reopeningPeriod.endDate
+      : new Date(reopenEndDate).getTime();
+    if (!Number.isFinite(endDate) || endDate <= Date.now() || endDate <= reopeningPeriod.startDate) {
+      toast.error("Choose a closing time in the future and after the opening time.");
+      return;
+    }
+    if (await onStatus(reopeningPeriod, "open", endDate === reopeningPeriod.endDate ? undefined : endDate)) {
+      setReopeningPeriod(null);
     }
   };
 
@@ -315,6 +334,19 @@ export default function AdminPeriodsPage() {
                       {changingStatus === p.id ? "Closing..." : "Close"}
                     </button>
                   )}
+                  {p.status === "closed" && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setReopeningPeriod(p);
+                        setReopenEndDate(toDateTimeLocal(p.endDate > Date.now() ? p.endDate : Date.now() + 86400000));
+                      }}
+                      disabled={changingStatus !== null}
+                      className="btn-secondary !px-3 !py-1.5 text-xs"
+                    >
+                      <RotateCcw className="h-3.5 w-3.5" /> Reopen
+                    </button>
+                  )}
                   {(p.status === "draft" || p.status === "scheduled") && (
                     <button onClick={() => openEdit(p)} className="btn-secondary !px-3 !py-1.5 text-xs">
                       Edit
@@ -329,6 +361,38 @@ export default function AdminPeriodsPage() {
           ))
         )}
       </div>
+
+      <Modal
+        open={reopeningPeriod !== null}
+        onClose={() => { if (changingStatus === null) setReopeningPeriod(null); }}
+        title="Reopen evaluation period"
+      >
+        {reopeningPeriod && (
+          <form onSubmit={onReopen} className="space-y-4">
+            <p className="text-sm text-slate-600 dark:text-slate-400">
+              Reopen <strong className="text-slate-900 dark:text-white">{reopeningPeriod.name}</strong>?
+              {" "}Assignments and submitted evaluations are kept. Students who have not finished can continue.
+              HR and Department Head results stay protected until the period closes again.
+            </p>
+            <FormField label="Closing time">
+              <input
+                required
+                type="datetime-local"
+                value={reopenEndDate}
+                onChange={(event) => setReopenEndDate(event.target.value)}
+                disabled={changingStatus !== null}
+                className={inputCls}
+              />
+            </FormField>
+            <div className="flex flex-wrap justify-end gap-2 pt-2">
+              <button type="button" onClick={() => setReopeningPeriod(null)} disabled={changingStatus !== null} className="btn-secondary">Cancel</button>
+              <button type="submit" disabled={changingStatus !== null || !reopenEndDate} className="btn-primary">
+                <RotateCcw className="h-4 w-4" /> {changingStatus === reopeningPeriod.id ? "Reopening..." : "Reopen period"}
+              </button>
+            </div>
+          </form>
+        )}
+      </Modal>
 
       <Modal open={open} onClose={() => setOpen(false)} title={editing ? "Edit period" : "New evaluation period"}>
         <form onSubmit={onSave} className="space-y-4">

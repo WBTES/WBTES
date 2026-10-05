@@ -7,6 +7,7 @@ import type {
   WeightedCommentAnalysis,
 } from "@/lib/types";
 import { fmtDateTime } from "@/lib/utils-extras";
+import { participationStatus, type ReportParticipation } from "@/lib/report-participation";
 
 type Meta = {
   teacher: string;
@@ -14,13 +15,43 @@ type Meta = {
   period: string;
 };
 
-type EvaluationLookups = {
+export type EvaluationLookups = {
   teachers?: Record<string, string>;
   departments?: Record<string, string>;
   subjects?: Record<string, string>;
   periods?: Record<string, string>;
   programs?: Record<string, string>;
 };
+
+type EvaluationExportOptions = {
+  participation?: ReportParticipation[];
+  partial?: boolean;
+};
+
+type AdditionalTable = { title: string; headers: string[]; rows: Array<Array<string | number>> };
+type AdditionalSheet = { name: string; rows: Array<Record<string, string | number>> };
+
+function participationRows(participation: ReportParticipation[], lookups: EvaluationLookups) {
+  return participation.map((row) => ({
+    Teacher: lookups.teachers?.[row.teacherId] ?? row.teacherId,
+    Subject: lookups.subjects?.[row.subjectId] ?? row.subjectId,
+    Department: lookups.departments?.[row.departmentId] ?? row.departmentId,
+    Period: lookups.periods?.[row.periodId] ?? row.periodId,
+    Assigned: row.assigned,
+    "Students evaluated": row.responses,
+    Pending: row.pending,
+    Status: participationStatus(row),
+  }));
+}
+
+function participationTable(participation: ReportParticipation[], lookups: EvaluationLookups): AdditionalTable {
+  const rows = participationRows(participation, lookups);
+  return {
+    title: "Teacher participation",
+    headers: ["Teacher", "Subject", "Department", "Period", "Assigned", "Students evaluated", "Pending", "Status"],
+    rows: rows.map((row) => Object.values(row)),
+  };
+}
 
 export type TeacherEvaluationReportData = {
   teacher: string;
@@ -49,7 +80,8 @@ export type ReportColumn<T> = {
 export function exportToPDF(
   evaluations: Evaluation[],
   meta: Meta,
-  lookups: EvaluationLookups = {}
+  lookups: EvaluationLookups = {},
+  options: EvaluationExportOptions = {}
 ) {
   const columns: ReportColumn<Evaluation>[] = [
     { header: "Teacher", value: (row) => lookups.teachers?.[row.teacherId] ?? row.teacherId },
@@ -61,23 +93,28 @@ export function exportToPDF(
   ];
   exportRowsToPDF(
     evaluations,
-    "WBTE Evaluation Report",
+    options.partial ? "WBTE Partial Evaluation Report" : "WBTE Evaluation Report",
     [
       `Teacher: ${meta.teacher}`,
       `Department: ${meta.department}`,
       `Period: ${meta.period}`,
-      `Responses: ${evaluations.length}`,
-      `Average: ${average(evaluations).toFixed(2)} / 5`,
+      `Submitted responses: ${evaluations.length}`,
+      `Report status: ${options.partial ? "Partial - evaluation is still in progress" : "Complete"}`,
+      `Assigned evaluation tasks: ${options.participation?.reduce((sum, row) => sum + row.assigned, 0) ?? "Not available"}`,
+      `Pending evaluation tasks: ${options.participation?.reduce((sum, row) => sum + row.pending, 0) ?? "Not available"}`,
+      `${options.partial ? "Preliminary average" : "Average"}: ${evaluations.length ? `${average(evaluations).toFixed(2)} / 5` : "Not available - no submitted responses"}`,
     ],
     columns,
-    `WBTE-Evaluation-Report-${Date.now()}.pdf`
+    `WBTE-Evaluation-Report-${Date.now()}.pdf`,
+    options.participation ? [participationTable(options.participation, lookups)] : []
   );
 }
 
 export function exportToExcel(
   evaluations: Evaluation[],
   meta: Meta,
-  lookups: EvaluationLookups = {}
+  lookups: EvaluationLookups = {},
+  options: EvaluationExportOptions = {}
 ) {
   const rows = evaluations.map((evaluation) => ({
     Teacher: lookups.teachers?.[evaluation.teacherId] ?? evaluation.teacherId,
@@ -100,10 +137,38 @@ export function exportToExcel(
       Department: meta.department,
       Period: meta.period,
       Responses: evaluations.length,
-      Average: average(evaluations),
+      "Report status": options.partial ? "Partial - evaluation is still in progress" : "Complete",
+      "Assigned evaluation tasks": options.participation?.reduce((sum, row) => sum + row.assigned, 0) ?? "Not available",
+      "Pending evaluation tasks": options.participation?.reduce((sum, row) => sum + row.pending, 0) ?? "Not available",
+      [options.partial ? "Preliminary average" : "Average"]: evaluations.length ? average(evaluations) : "Not available",
     },
-    `WBTE-Evaluation-Report-${Date.now()}.xlsx`
+    `WBTE-Evaluation-Report-${Date.now()}.xlsx`,
+    options.participation ? [{ name: "Teacher Participation", rows: participationRows(options.participation, lookups) }] : []
   );
+}
+
+export function exportParticipationReport(
+  kind: "pdf" | "excel",
+  participation: ReportParticipation[],
+  period: string,
+  lookups: EvaluationLookups
+) {
+  const rows = participationRows(participation, lookups);
+  const summary = {
+    Period: period,
+    "Assigned evaluation tasks": participation.reduce((sum, row) => sum + row.assigned, 0),
+    "Submitted responses": participation.reduce((sum, row) => sum + row.responses, 0),
+    "Pending evaluation tasks": participation.reduce((sum, row) => sum + row.pending, 0),
+    "Report status": participation.some((row) => participationStatus(row) === "Partial")
+      ? "Partial"
+      : participation.some((row) => !row.assigned) ? "Historical (assignment unavailable)" : "Complete",
+  };
+  if (kind === "excel") {
+    exportRowsToExcel(rows, "Teacher Participation", summary, `WBTE-Participation-${Date.now()}.xlsx`);
+  } else {
+    const table = participationTable(participation, lookups);
+    exportRowsToPDF([], "WBTE Teacher Participation Report", Object.entries(summary).map(([key, value]) => `${key}: ${value}`), [], `WBTE-Participation-${Date.now()}.pdf`, [table]);
+  }
 }
 
 export function exportTeacherEvaluationReportPDF(report: TeacherEvaluationReportData) {
@@ -381,9 +446,10 @@ export function exportRowsToPDF<T>(
   title: string,
   summaryLines: string[],
   columns: ReportColumn<T>[],
-  filename: string
+  filename: string,
+  tablesBefore: AdditionalTable[] = []
 ) {
-  const document = new jsPDF({ orientation: columns.length > 6 ? "landscape" : "portrait" });
+  const document = new jsPDF({ orientation: columns.length > 6 || tablesBefore.some((table) => table.headers.length > 6) ? "landscape" : "portrait" });
   document.setFontSize(18);
   document.text(title, 14, 18);
   document.setFontSize(9);
@@ -394,8 +460,25 @@ export function exportRowsToPDF<T>(
   summaryLines.forEach((line, index) => {
     document.text(line, 14, 34 + index * 6);
   });
-  autoTable(document, {
-    startY: 40 + summaryLines.length * 6,
+  let tableY = 40 + summaryLines.length * 6;
+  tablesBefore.forEach((table) => {
+    document.setFontSize(11);
+    document.text(table.title, 14, tableY);
+    autoTable(document, {
+      startY: tableY + 5,
+      head: [table.headers],
+      body: table.rows,
+      styles: { fontSize: 8, cellPadding: 2, overflow: "linebreak" },
+      headStyles: { fillColor: [37, 99, 235] },
+    });
+    tableY = ((document as jsPDF & { lastAutoTable?: { finalY: number } }).lastAutoTable?.finalY ?? tableY) + 12;
+    if (tableY > document.internal.pageSize.getHeight() - 25 && columns.length) {
+      document.addPage();
+      tableY = 18;
+    }
+  });
+  if (columns.length) autoTable(document, {
+    startY: tableY,
     head: [columns.map((column) => column.header)],
     body: rows.map((row) => columns.map((column) => String(column.value(row)))),
     styles: {
@@ -412,7 +495,8 @@ export function exportRowsToExcel(
   rows: Array<Record<string, unknown>>,
   sheetName: string,
   summary: Record<string, string | number>,
-  filename: string
+  filename: string,
+  additionalSheets: AdditionalSheet[] = []
 ) {
   const workbook = XLSX.utils.book_new();
   const dataSheet = XLSX.utils.json_to_sheet(rows);
@@ -421,6 +505,10 @@ export function exportRowsToExcel(
     Object.entries(summary).map(([key, value]) => [key, value])
   );
   XLSX.utils.book_append_sheet(workbook, summarySheet, "Summary");
+  additionalSheets.forEach((sheet) => {
+    const safeRows = sheet.rows.map((row) => Object.fromEntries(Object.entries(row).map(([key, value]) => [key, typeof value === "string" ? safeSpreadsheetText(value) : value])));
+    XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(safeRows), sheet.name.slice(0, 31));
+  });
   XLSX.writeFile(workbook, filename);
 }
 

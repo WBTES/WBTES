@@ -4,12 +4,13 @@ import * as React from "react";
 import { useReducedMotion } from "framer-motion";
 import { Bar, BarChart, CartesianGrid, Cell, Legend, Line, LineChart, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import type { AnalyticsData } from "@/lib/analytics";
+import { TeacherRatingChart } from "./teacher-rating-chart";
 
 const COLORS = ["#2563eb", "#10b981", "#f59e0b", "#f43f5e", "#06b6d4", "#a855f7"];
 const TICK = { fill: "var(--analytics-axis)", fontSize: 11 };
 const GRID = "rgba(148,163,184,0.22)";
 
-export function EvaluationAnalyticsCharts({ data }: { data: AnalyticsData }) {
+export function EvaluationAnalyticsCharts({ data, showPreliminary = false }: { data: AnalyticsData; showPreliminary?: boolean }) {
   const reduceMotion = useReducedMotion();
   const animate = !reduceMotion;
   const donutData = data.totalEvaluations ? data.departmentCounts : [{ id: "empty", name: "No responses", evaluations: 1 }];
@@ -86,23 +87,7 @@ export function EvaluationAnalyticsCharts({ data }: { data: AnalyticsData }) {
           <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">Counts are assigned evaluation tasks, not unique students.</p>
         </Panel>
       </div>
-      <Panel title="Top teachers by average rating">
-        <div className="mb-4 flex flex-wrap items-center justify-between gap-3 text-sm">
-          <span className="text-slate-500 dark:text-slate-400">All {data.topTeachers.length} evaluated teachers</span>
-          <span>Overall released rating: <strong>{data.averageRating === null ? "Not released" : `${data.averageRating.toFixed(2)} / 5`}</strong></span>
-        </div>
-        <div className="max-h-[440px] overflow-y-auto">
-          {data.topTeachers.length ? <ul className="divide-y divide-slate-200 dark:divide-slate-800">
-            {data.topTeachers.map((teacher) => <li key={teacher.id} className="grid min-w-0 gap-2 py-3 sm:grid-cols-[minmax(0,1fr)_minmax(100px,1fr)_130px] sm:items-center">
-              <div className="min-w-0"><p className="break-words text-sm font-semibold">{teacher.name}</p><p className="mt-1 text-xs text-slate-500 dark:text-slate-400">{teacher.responses} submitted response{teacher.responses === 1 ? "" : "s"}</p></div>
-              <div className="h-2 overflow-hidden rounded-full bg-slate-100 dark:bg-slate-800" aria-hidden="true">
-                {teacher.average !== null && <div className="h-full rounded-full bg-brand-500" style={{ width: `${teacher.average / 5 * 100}%` }} />}
-              </div>
-              <p className="text-sm font-semibold sm:text-right">{teacher.average === null ? <span className="text-xs font-normal text-slate-500 dark:text-slate-400">Not released</span> : `${teacher.average.toFixed(2)} / 5`}</p>
-            </li>)}
-          </ul> : <p className="py-6 text-center text-sm text-slate-500">No teachers evaluated yet.</p>}
-        </div>
-      </Panel>
+      <TeacherRatingChart teachers={data.topTeachers} overallAverage={data.averageRating} animate={animate} showPreliminary={showPreliminary} />
     </div>
   );
 }

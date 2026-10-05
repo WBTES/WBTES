@@ -113,6 +113,7 @@ export default function AdminAnalyticsPage() {
           teachers: teacherList,
           departments,
           periods,
+          includePreliminaryRatings: true,
         }));
         setHasLoaded(true);
       } catch (cause) {
@@ -270,7 +271,7 @@ export default function AdminAnalyticsPage() {
       </section>
 
       <div className="mt-4">
-        <EvaluationAnalyticsCharts data={data} />
+        <EvaluationAnalyticsCharts data={data} showPreliminary />
       </div>
     </div>
   );

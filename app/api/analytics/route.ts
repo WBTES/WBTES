@@ -3,7 +3,7 @@ import { adminDb } from "@/lib/firebase/admin";
 import { buildAnalytics } from "@/lib/analytics";
 import { apiErrorResponse } from "@/lib/server/api-response";
 import { ApiError, requireDepartmentStaff } from "@/lib/server/require-admin";
-import type { Department, Evaluation, EvaluationCompletion, EvaluationPeriod, Teacher, TeacherAssignment } from "@/lib/types";
+import type { Department, Evaluation, EvaluationCompletion, EvaluationPeriod, Subject, Teacher, TeacherAssignment } from "@/lib/types";
 
 export const runtime = "nodejs";
 
@@ -11,13 +11,14 @@ export async function GET(request: Request) {
   try {
     const { profile } = await requireDepartmentStaff(request);
     const periodId = new URL(request.url).searchParams.get("periodId") ?? "";
-    const [evaluationDocs, completionDocs, assignmentDocs, teacherDocs, departmentDocs, periodDocs] = await Promise.all([
+    const [evaluationDocs, completionDocs, assignmentDocs, teacherDocs, departmentDocs, periodDocs, subjectDocs] = await Promise.all([
       adminDb.collection("evaluations").get(),
       adminDb.collection("evaluationCompletions").get(),
       adminDb.collection("teacherAssignments").get(),
       adminDb.collection("teachers").get(),
       adminDb.collection("departments").get(),
       adminDb.collection("evaluationPeriods").get(),
+      adminDb.collection("subjects").get(),
     ]);
     const periods = periodDocs.docs.map((item) => ({ ...item.data(), id: item.id } as EvaluationPeriod));
     if (periodId && !periods.some((period) => period.id === periodId)) throw new ApiError(400, "Evaluation period not found.");
@@ -31,11 +32,21 @@ export async function GET(request: Request) {
       periods: periods.filter((period) => !periodId || period.id === periodId),
       releasedPeriodIds: profile.role === "admin" ? undefined : new Set(periods.filter((period) => period.status === "closed").map((period) => period.id)),
       minimumResponses: profile.role === "department_head" ? 5 : 1,
+      includePreliminaryRatings: profile.role === "admin",
     });
     // Only aggregates leave the server: never student IDs, answers, or raw comments.
     return NextResponse.json({
       data,
       periods: [...periods].sort((a, b) => b.endDate - a.endDate).map(({ id, name }) => ({ id, name })),
+      lookups: {
+        teachers: Object.fromEntries(teacherDocs.docs.map((item) => [item.id, String(item.data().displayName ?? "Teacher")])),
+        departments: Object.fromEntries(data.departmentCounts.map((item) => [item.id, item.name])),
+        subjects: Object.fromEntries(subjectDocs.docs.map((item) => {
+          const subject = item.data() as Omit<Subject, "id">;
+          return [item.id, subject.code ? `${subject.code} - ${subject.name}` : subject.name];
+        })),
+        periods: Object.fromEntries(periods.map((period) => [period.id, period.name])),
+      },
     }, { headers: { "Cache-Control": "private, no-store" } });
   } catch (error) {
     return apiErrorResponse(error, "Analytics could not be loaded.");

@@ -56,32 +56,57 @@ export type PeriodStatusResult = DeliveryResult & {
 export async function setPeriodStatus(
   periodId: string,
   status: "open" | "closed",
-  adminUid: string
+  adminUid: string,
+  options: { endDate?: number } = {}
 ): Promise<PeriodStatusResult> {
+  if (options.endDate !== undefined && (status !== "open" || !Number.isFinite(options.endDate))) {
+    throw new ApiError(400, "A valid closing time is required when reopening a period.");
+  }
   const periodRef = adminDb.collection("evaluationPeriods").doc(periodId);
   const transition = await adminDb.runTransaction(async (transaction) => {
     const snapshot = await transaction.get(periodRef);
     if (!snapshot.exists) throw new ApiError(404, "Evaluation period was not found.");
 
-    const previousStatus = String(snapshot.data()?.status ?? "draft") as PeriodStatus;
-    if (status === "open" && !["draft", "scheduled", "open"].includes(previousStatus)) {
-      throw new ApiError(409, "A closed evaluation period cannot be reopened.");
+    const period = snapshot.data()!;
+    const previousStatus = String(period.status ?? "draft") as PeriodStatus;
+    const reopening = previousStatus === "closed" && status === "open";
+    if (status === "open" && !["draft", "scheduled", "open", "closed"].includes(previousStatus)) {
+      throw new ApiError(409, "This evaluation period cannot be opened.");
     }
     if (status === "closed" && !["open", "closed"].includes(previousStatus)) {
       throw new ApiError(409, "Only an open evaluation period can be closed.");
     }
 
     const changed = previousStatus !== status;
+    const now = Date.now();
+    const endDate = options.endDate ?? Number(period.endDate);
+    const repeatedReopen = previousStatus === "open" && status === "open" && options.endDate === Number(period.endDate);
+    if (options.endDate !== undefined && !reopening && !repeatedReopen) {
+      throw new ApiError(409, "Only a closed period can change its deadline through the reopen action.");
+    }
+    if (changed && status === "open") {
+      const startDate = Number(period.startDate);
+      if (!Number.isFinite(startDate) || !Number.isFinite(endDate) || endDate <= startDate || endDate <= now) {
+        throw new ApiError(400, "Choose a closing time in the future before opening this period.");
+      }
+      if (reopening && startDate > now) {
+        throw new ApiError(400, "This period cannot be reopened before its opening time.");
+      }
+    }
     if (changed) {
       transaction.update(periodRef, {
         status,
-        updatedAt: Date.now(),
+        ...(reopening && options.endDate !== undefined ? { endDate } : {}),
+        updatedAt: now,
       });
     }
     return {
       changed,
       previousStatus,
-      periodName: String(snapshot.data()?.name ?? "Evaluation period"),
+      reopening,
+      previousEndDate: Number(period.endDate),
+      endDate,
+      periodName: String(period.name ?? "Evaluation period"),
     };
   });
 
@@ -97,7 +122,7 @@ export async function setPeriodStatus(
 
   if (transition.changed) {
     const delivery = status === "open"
-      ? await deliverPeriodOpened(periodId, transition.periodName)
+      ? await deliverPeriodOpened(periodId, transition.periodName, transition.reopening)
       : await deliverPeriodClosed(periodId);
     result.notified = delivery.notified;
     result.emailed = delivery.emailed;
@@ -108,11 +133,12 @@ export async function setPeriodStatus(
   try {
     await adminDb.collection("activityLogs").add({
       userId: adminUid,
-      action: `evaluation_period_${status}`,
+      action: transition.reopening ? "evaluation_period_reopened" : `evaluation_period_${status}`,
       metadata: {
         periodId,
         previousStatus: transition.previousStatus,
         changed: transition.changed,
+        ...(transition.reopening ? { previousEndDate: transition.previousEndDate, endDate: transition.endDate } : {}),
       },
       createdAt: Date.now(),
     });
@@ -125,7 +151,8 @@ export async function setPeriodStatus(
 
 async function deliverPeriodOpened(
   periodId: string,
-  periodName: string
+  periodName: string,
+  reopening = false
 ): Promise<DeliveryResult> {
   const result = emptyDeliveryResult();
   let students: DocumentSnapshot<DocumentData>[] = [];
@@ -135,16 +162,27 @@ async function deliverPeriodOpened(
       .collection("teacherAssignments")
       .where("periodId", "==", periodId)
       .get();
+    const completions = reopening
+      ? await adminDb.collection("evaluationCompletions").where("periodId", "==", periodId).get()
+      : null;
+    const completed = new Set(completions?.docs.map((item) => {
+      const data = item.data();
+      return `${data.assignmentId}|${data.studentId}`;
+    }) ?? []);
     const studentIds = new Set<string>();
     assignments.docs.forEach((assignment) => {
       const ids = assignment.data().studentIds;
       if (Array.isArray(ids)) {
-        ids.forEach((studentId) => studentIds.add(String(studentId)));
+        ids.forEach((studentId) => {
+          if (!completed.has(`${assignment.id}|${studentId}`)) studentIds.add(String(studentId));
+        });
       }
     });
     students = await getActiveUsers([...studentIds]);
 
-    const message = `Your teacher evaluations for ${periodName} are ready. Complete them before the deadline.`;
+    const message = reopening
+      ? `${periodName} has reopened. Complete your remaining teacher evaluations before the deadline. Your submitted evaluations are saved.`
+      : `Your teacher evaluations for ${periodName} are ready. Complete them before the deadline.`;
     for (let index = 0; index < students.length; index += 500) {
       const batch = adminDb.batch();
       students.slice(index, index + 500).forEach((student) => {
@@ -154,7 +192,7 @@ async function deliverPeriodOpened(
         batch.set(notification, {
           userId: student.id,
           type: "evaluation_open",
-          title: "Evaluation period is now open",
+          title: reopening ? "Evaluation period reopened" : "Evaluation period is now open",
           body: message,
           read: false,
           createdAt: Date.now(),
@@ -170,12 +208,14 @@ async function deliverPeriodOpened(
 
   const emailResult = await sendOptionalEmails(students.map((student) => ({
     to: String(student.data()?.email ?? ""),
-    subject: "Evaluation period is now open",
-    text: `Your teacher evaluations for ${periodName} are ready. Complete them before the deadline.`,
+    subject: reopening ? "Evaluation period reopened" : "Evaluation period is now open",
+    text: reopening
+      ? `${periodName} has reopened. Complete your remaining teacher evaluations before the deadline. Your submitted evaluations are saved.`
+      : `Your teacher evaluations for ${periodName} are ready. Complete them before the deadline.`,
   })));
   result.emailed = emailResult.sent;
   if (emailResult.warning) result.warnings.push(emailResult.warning);
-  if (students.length === 0) {
+  if (students.length === 0 && !reopening) {
     result.warnings.push("No assigned students were found for this evaluation period.");
   }
   return result;

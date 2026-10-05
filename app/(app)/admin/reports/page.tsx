@@ -36,6 +36,7 @@ import type {
 } from "@/lib/types";
 import { fmtDateTime } from "@/lib/utils-extras";
 import { reportableEvaluations } from "@/lib/evaluation-results";
+import { buildReportParticipation, participationStatus } from "@/lib/report-participation";
 import toast from "react-hot-toast";
 
 type ManagedStudent = StudentRegistry & {
@@ -245,6 +246,33 @@ export default function AdminReportsPage() {
     [evaluations, matchesResponseFilters]
   );
 
+  const reportParticipation = React.useMemo(() => {
+    // Keep the full selected cohort in the denominator, even when the status filter is "completed".
+    const cohort = progress.filter((row) => {
+      const period = periods.find((item) => item.id === row.periodId);
+      if (filters.teacherId && row.teacherId !== filters.teacherId) return false;
+      if (filters.departmentId && row.departmentId !== filters.departmentId) return false;
+      if (filters.programId && row.programId !== filters.programId) return false;
+      if (filters.yearLevel && row.yearLevel !== filters.yearLevel) return false;
+      if (filters.periodId && row.periodId !== filters.periodId) return false;
+      if (filters.semester && period?.semester !== filters.semester) return false;
+      if (filters.academicYear && period?.academicYear !== filters.academicYear) return false;
+      const needle = search.trim().toLowerCase();
+      if (!needle) return true;
+      return [
+        teachers.find((item) => item.id === row.teacherId)?.displayName,
+        subjects.find((item) => item.id === row.subjectId)?.name,
+        departments.find((item) => item.id === row.departmentId)?.name,
+        programs.find((item) => item.id === row.programId)?.code,
+        row.yearLevel,
+        period?.name,
+      ].some((value) => value?.toLowerCase().includes(needle));
+    });
+    return buildReportParticipation(filteredSubmitted, cohort);
+  }, [departments, filteredSubmitted, filters, periods, programs, progress, search, subjects, teachers]);
+  const partialReport = filteredSubmitted.length > filteredEvaluations.length
+    || reportParticipation.some((row) => participationStatus(row) === "Partial");
+
   const filteredProgress = React.useMemo(() => progress.filter((row) => {
     const period = periods.find((item) => item.id === row.periodId);
     if (filters.teacherId && row.teacherId !== filters.teacherId) return false;
@@ -314,7 +342,8 @@ export default function AdminReportsPage() {
     setBusy(true);
     try {
       if (mode === "responses") {
-        if (filteredEvaluations.length === 0) throw new Error("No finalized anonymous responses match these filters.");
+        if (filters.status === "pending") throw new Error("Pending students have no submitted responses. Choose all statuses for a partial evaluation report, or export the Student status view.");
+        if (!filteredSubmitted.length && !reportParticipation.length) throw new Error("No evaluation records or assigned students match these filters.");
         const meta = reportMeta(filters, teachers, departments, periods);
         const lookups = {
           teachers: Object.fromEntries(teachers.map((item) => [item.id, item.displayName])),
@@ -323,8 +352,9 @@ export default function AdminReportsPage() {
           periods: Object.fromEntries(periods.map((item) => [item.id, item.name])),
           programs: Object.fromEntries(programs.map((item) => [item.id, item.code])),
         };
-        if (kind === "pdf") exportToPDF(filteredEvaluations, meta, lookups);
-        else exportToExcel(filteredEvaluations, meta, lookups);
+        const options = { participation: reportParticipation, partial: partialReport };
+        if (kind === "pdf") exportToPDF(filteredSubmitted, meta, lookups, options);
+        else exportToExcel(filteredSubmitted, meta, lookups, options);
       } else {
         if (filteredProgress.length === 0) throw new Error("No student progress rows match these filters.");
         const rows = filteredProgress.map((row) => ({
@@ -375,7 +405,7 @@ export default function AdminReportsPage() {
           );
         }
       }
-      toast.success("Report exported");
+      toast.success(mode === "responses" && partialReport ? "Partial report exported" : "Report exported");
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Export failed.");
     } finally {
@@ -517,6 +547,11 @@ export default function AdminReportsPage() {
 
       {mode === "responses" ? (
         <>
+          {!initialLoading && partialReport && (
+            <p className="mb-4 rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200">
+              Partial report: {filteredSubmitted.length} submitted responses. Downloads include the evaluated, assigned, and pending counts for each teacher and subject. Any exported ratings are preliminary; finalized charts remain protected.
+            </p>
+          )}
           <AnonymousCommentsPreview
             rows={submittedComments}
             teachers={teachers}

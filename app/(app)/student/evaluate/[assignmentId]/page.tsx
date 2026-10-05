@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { useParams, useRouter } from "next/navigation";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import {
   ArrowLeft,
@@ -29,11 +29,24 @@ import type {
 import { getStudentEvaluationQuestions } from "@/lib/evaluation-questions";
 import { authenticatedFetch, readApiResponse } from "@/lib/authenticated-fetch";
 import { cn, formatSubjectLabel } from "@/lib/utils";
+import { effectivePeriodStatus } from "@/lib/periods";
+import { evaluationQueueHref, nextPendingEvaluation, normalizeEvaluationQueue } from "@/lib/evaluation-queue";
 import toast from "react-hot-toast";
 
 export default function EvaluatePage() {
   const params = useParams<{ assignmentId: string }>();
+  return (
+    <React.Suspense fallback={<EvaluationLoading />}>
+      <AssignmentEvaluation key={params.assignmentId} assignmentId={params.assignmentId} />
+    </React.Suspense>
+  );
+}
+
+function AssignmentEvaluation({ assignmentId }: { assignmentId: string }) {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const queueValue = searchParams.get("queue");
+  const queue = React.useMemo(() => normalizeEvaluationQueue(assignmentId, queueValue), [assignmentId, queueValue]);
   const { user, profile } = useAuth();
   const [assignment, setAssignment] = React.useState<TeacherAssignment | null>(null);
   const [teacher, setTeacher] = React.useState<Teacher | null>(null);
@@ -48,12 +61,18 @@ export default function EvaluatePage() {
   const [done, setDone] = React.useState(false);
   const [loading, setLoading] = React.useState(true);
   const [loadError, setLoadError] = React.useState<string | null>(null);
+  const [completedIds, setCompletedIds] = React.useState<Set<string>>(new Set());
+  const submitInProgress = React.useRef(false);
+  const nextAssignment = nextPendingEvaluation(queue, assignmentId, completedIds);
+  const completedCount = queue.filter((id) => completedIds.has(id)).length;
 
   React.useEffect(() => {
-    if (!params.assignmentId || !firebaseReady || !user || !profile) return;
+    if (!assignmentId || !firebaseReady || !user || !profile) return;
+    let active = true;
     (async () => {
       try {
-        const aSnap = await getDoc(doc(db, "teacherAssignments", params.assignmentId));
+        const aSnap = await getDoc(doc(db, "teacherAssignments", assignmentId));
+        if (!active) return;
         if (!aSnap.exists()) {
           setLoadError("This assignment doesn't exist or has been removed.");
           return;
@@ -73,6 +92,7 @@ export default function EvaluatePage() {
             where("studentId", "==", user.uid)
           )),
         ]);
+        if (!active) return;
         if (tSnap.exists()) setTeacher({ id: tSnap.id, ...(tSnap.data() as Omit<Teacher, "id">) });
         if (sSnap.exists()) setSubject({ id: sSnap.id, ...(sSnap.data() as Omit<Subject, "id">) });
         if (dSnap.exists()) setDepartment({ id: dSnap.id, ...(dSnap.data() as Omit<Department, "id">) });
@@ -93,24 +113,29 @@ export default function EvaluatePage() {
             )
           : [];
         setQuestions(qs);
-        if (eSnap.docs.some((item) => {
-          const completion = item.data();
-          return completion.assignmentId === a.id;
-        })) {
-          setDone(true);
-        }
+        const completed = new Set<string>(eSnap.docs.map((item) => item.data().assignmentId as string).filter(Boolean));
+        setCompletedIds(completed);
+        setDone(completed.has(a.id));
       } catch (err) {
+        if (!active) return;
         console.error("evaluate load failed:", err);
         setLoadError(err instanceof Error ? err.message : "Failed to load this evaluation");
       } finally {
-        setLoading(false);
+        if (active) setLoading(false);
       }
     })();
-  }, [params.assignmentId, user, profile]);
+    return () => { active = false; };
+  }, [assignmentId, user, profile]);
+
+  React.useEffect(() => {
+    if (!loading && !loadError && done && nextAssignment) {
+      router.replace(evaluationQueueHref(queue, nextAssignment));
+    }
+  }, [done, loadError, loading, nextAssignment, queue, router]);
 
   const onSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!user || !assignment) return;
+    if (!user || !assignment || submitInProgress.current) return;
     if (done) {
       toast.error("You've already submitted this evaluation");
       return;
@@ -124,6 +149,7 @@ export default function EvaluatePage() {
       }
     }
 
+    submitInProgress.current = true;
     setSubmitting(true);
     try {
       const response = await authenticatedFetch("/api/evaluations/submit", {
@@ -140,29 +166,18 @@ export default function EvaluatePage() {
           ? "Evaluation submitted. A confirmation email was sent."
           : "Evaluation submitted successfully."
       );
+      setCompletedIds((current) => new Set([...current, assignment.id]));
       setDone(true);
-      const queue = new URLSearchParams(window.location.search)
-        .get("queue")
-        ?.split(",")
-        .filter(Boolean) ?? [];
-      const currentIndex = queue.indexOf(assignment.id);
-      const nextAssignment = currentIndex >= 0 ? queue[currentIndex + 1] : "";
-      if (nextAssignment) {
-        window.setTimeout(() => {
-          router.push(
-            `/student/evaluate/${nextAssignment}?queue=${encodeURIComponent(queue.join(","))}`
-          );
-        }, 900);
-      }
     } catch (err: unknown) {
       toast.error(err instanceof Error ? err.message : "Submit failed");
     } finally {
+      submitInProgress.current = false;
       setSubmitting(false);
     }
   };
 
   if (loading) {
-    return <div className="flex h-64 items-center justify-center"><div className="h-8 w-8 animate-spin rounded-full border-4 border-brand-200 border-t-brand-600" /></div>;
+    return <EvaluationLoading />;
   }
 
   if (loadError) {
@@ -187,20 +202,21 @@ export default function EvaluatePage() {
         <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-emerald-500/15 text-emerald-600">
           <CheckCircle2 className="h-7 w-7" />
         </div>
-        <h2 className="mt-4 text-2xl font-bold text-slate-900 dark:text-white">All done!</h2>
+        <h2 className="mt-4 text-2xl font-bold text-slate-900 dark:text-white">{nextAssignment ? "Evaluation submitted" : "Session complete"}</h2>
         <p className="mt-2 text-sm text-slate-600 dark:text-slate-400">
-          You&apos;ve already submitted the {subject.name} evaluation for {teacher.displayName}. Thanks for your feedback.
+          {completedCount} of {queue.length} evaluations completed.
+          {nextAssignment ? " Opening the next evaluation..." : " Thanks for your feedback."}
         </p>
-        <Link href="/student/evaluations" className="btn-primary mt-6">Back to evaluations</Link>
+        {!nextAssignment && <Link href="/student/history" className="btn-primary mt-6">View history</Link>}
       </div>
     );
   }
 
-  if (period.status !== "open") {
+  if (period.status !== "open" || effectivePeriodStatus(period) !== "open") {
     return (
       <div className="mx-auto max-w-xl rounded-3xl border border-amber-200 bg-amber-50 p-6 text-amber-700">
         <p className="font-semibold">This evaluation is not open</p>
-        <p className="mt-1 text-sm">The period &ldquo;{period.name}&rdquo; is currently {period.status}.</p>
+        <p className="mt-1 text-sm">The period &ldquo;{period.name}&rdquo; is currently {effectivePeriodStatus(period)}.</p>
       </div>
     );
   }
@@ -222,8 +238,12 @@ export default function EvaluatePage() {
   return (
     <div className="mx-auto max-w-2xl space-y-6">
       <Link href="/student/evaluations" className="inline-flex items-center gap-1 text-sm text-slate-600 hover:text-slate-900 dark:text-slate-400">
-        <ArrowLeft className="h-3.5 w-3.5" /> Back
+        <ArrowLeft className="h-3.5 w-3.5" /> Exit session
       </Link>
+
+      <p className="text-sm font-semibold text-brand-700 dark:text-brand-300" aria-live="polite">
+        Evaluation {Math.min(completedCount + 1, queue.length)} of {queue.length}
+      </p>
 
       <div className="rounded-3xl border border-slate-200/80 bg-white p-6 shadow-sm dark:border-slate-800/80 dark:bg-slate-900">
         <div className="flex items-center gap-4">
@@ -316,11 +336,15 @@ export default function EvaluatePage() {
         </div>
 
         <button type="submit" disabled={submitting} className="btn-primary w-full py-3 text-base">
-          {submitting ? "Submitting..." : (<><Send className="h-4 w-4" /> Submit evaluation</>)}
+          {submitting ? "Submitting..." : (<><Send className="h-4 w-4" /> {nextAssignment ? "Submit and continue" : "Submit evaluation"}</>)}
         </button>
       </form>
     </div>
   );
+}
+
+function EvaluationLoading() {
+  return <div className="flex h-64 items-center justify-center" role="status" aria-label="Loading evaluation"><div className="h-8 w-8 animate-spin rounded-full border-4 border-brand-200 border-t-brand-600" /></div>;
 }
 
 function AssignmentDetail({

@@ -13,7 +13,8 @@ function loadModule(path, dependencies = {}) {
   return module.exports;
 }
 const results = loadModule("lib/evaluation-results.ts");
-const { buildAnalytics } = loadModule("lib/analytics.ts", { "./evaluation-results": results });
+const participation = loadModule("lib/report-participation.ts");
+const { buildAnalytics } = loadModule("lib/analytics.ts", { "./evaluation-results": results, "./report-participation": participation });
 
 function fixture() {
   return {
@@ -163,7 +164,7 @@ test("unresolved historical departments remain counted instead of disappearing",
 });
 
 function analyticsRoute(input, role) {
-  const collections = { evaluations: input.evaluations, evaluationCompletions: input.completions, teacherAssignments: input.assignments, teachers: input.teachers, departments: input.departments, evaluationPeriods: input.periods };
+  const collections = { evaluations: input.evaluations, evaluationCompletions: input.completions, teacherAssignments: input.assignments, teachers: input.teachers, departments: input.departments, evaluationPeriods: input.periods, subjects: [{ id: "subject1", name: "Subject One", code: "S1" }] };
   return loadModule("app/api/analytics/route.ts", {
     "@/lib/firebase/admin": { adminDb: { collection(name) { return { async get() { return { docs: collections[name].map((item) => ({ id: item.id, data: () => item })) }; } }; } } },
     "@/lib/analytics": { buildAnalytics },
@@ -185,6 +186,10 @@ test("aggregate endpoint applies role-specific release rules and excludes privat
     assert.equal(response.headers.get("Cache-Control"), "private, no-store");
     const body = await response.json();
     assert.equal(body.data.averageRating, role === "department_head" ? null : 4.5);
+    assert.equal(body.data.participation[0].assigned, 2);
+    assert.equal(body.data.participation[0].responses, 2);
+    assert.equal(body.data.participation[0].pending, 0);
+    assert.equal(body.lookups.subjects.subject1, "S1 - Subject One");
     const serialized = JSON.stringify(body);
     for (const privateValue of ["student1", "student2", "Private comment", "completion1", "evaluation1"]) {
       assert.equal(serialized.includes(privateValue), false);
@@ -213,4 +218,66 @@ test("period filters scope both submitted responses and assigned task counts", a
   assert.equal(body.data.averageRating, null);
   assert.equal(body.data.completionByDepartment[0].completed, 0);
   assert.equal(body.data.completionByDepartment[1].pending, 2);
+  assert.equal(body.data.participation[0].assigned, 2);
+  assert.equal(body.data.participation[0].responses, 0);
+  assert.equal(body.data.participation[0].pending, 2);
+});
+
+test("Admin preliminary averages use submitted scores, not the entire assigned roster", () => {
+  const input = fixture();
+  input.assignments[0].studentIds = Array.from({ length: 43 }, (_, i) => `student${i + 1}`);
+  input.evaluations = [{ ...input.evaluations[0], averageScore: 5 }];
+  input.completions = [input.completions[0]];
+  const data = buildAnalytics({ ...input, includePreliminaryRatings: true });
+  assert.equal(data.topTeachers[0].average, null);
+  assert.equal(data.averageRating, null);
+  assert.equal(data.topTeachers[0].preliminaryAverage, 5);
+  assert.equal(data.topTeachers[0].preliminaryResponses, 1);
+});
+
+test("preliminary averages stay teacher-specific and exclude invalid scores", () => {
+  const input = fixture();
+  input.completions = [];
+  input.evaluations = [3, 5, 0, NaN, 6].map((averageScore, i) => ({ ...input.evaluations[0], id: `e${i}`, averageScore }));
+  input.evaluations.push({ ...input.evaluations[0], id: "other", teacherId: "teacher2", assignmentId: "other", averageScore: 2.5 });
+  const data = buildAnalytics({ ...input, includePreliminaryRatings: true });
+  const first = data.topTeachers.find((t) => t.id === "teacher1");
+  assert.equal(first.preliminaryAverage, 4);
+  assert.equal(first.preliminaryResponses, 2);
+  assert.equal(first.responses, 5);
+  assert.equal(data.topTeachers.find((t) => t.id === "teacher2").preliminaryAverage, 2.5);
+  assert.equal(first.average, null);
+});
+
+test("teachers without rated responses have no preliminary average", () => {
+  const input = fixture();
+  input.evaluations.forEach((e) => { e.averageScore = 0; });
+  const data = buildAnalytics({ ...input, includePreliminaryRatings: true });
+  assert.equal(data.topTeachers[0].preliminaryAverage, null);
+  assert.equal(data.topTeachers[0].preliminaryResponses, 0);
+});
+
+test("preliminary values disappear once final teacher ratings are released", () => {
+  const data = buildAnalytics({ ...fixture(), includePreliminaryRatings: true });
+  assert.equal(data.topTeachers[0].average, 4.5);
+  assert.equal(data.topTeachers[0].preliminaryAverage, undefined);
+  assert.equal(data.averageRating, 4.5);
+});
+
+test("only Admin can receive preliminary averages for pending evaluations", async () => {
+  const input = fixture();
+  input.periods[0].status = "open";
+  input.completions = [];
+  for (const role of ["admin", "hr", "department_head"]) {
+    const body = await (await analyticsRoute(input, role).GET(new Request("http://localhost/api/analytics?includePreliminaryRatings=true"))).json();
+    assert.equal(body.data.topTeachers[0].average, null);
+    assert.equal(body.data.averageRating, null);
+    if (role === "admin") {
+      assert.equal(body.data.topTeachers[0].preliminaryAverage, 4.5);
+      assert.equal(body.data.topTeachers[0].preliminaryResponses, 2);
+    } else {
+      assert.equal(JSON.stringify(body).includes("preliminaryAverage"), false);
+      assert.equal(JSON.stringify(body).includes("preliminaryResponses"), false);
+    }
+  }
 });

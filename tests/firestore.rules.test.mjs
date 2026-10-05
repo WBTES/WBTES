@@ -210,6 +210,18 @@ describe("HR Firestore access", () => {
     await assertSucceeds(getDoc(doc(db, "performanceReports", "report-closed-b")));
   });
 
+  it("protects HR results again when an administrator reopens a period", async () => {
+    const hrDb = authenticatedDb("hr-a", "hr");
+    const adminDb = authenticatedDb("admin", "admin");
+    await assertSucceeds(getDoc(doc(hrDb, "evaluations", "eval-closed-a")));
+    await assertSucceeds(updateDoc(doc(adminDb, "evaluationPeriods", "period-closed"), { status: "open" }));
+    await assertFails(getDoc(doc(hrDb, "evaluations", "eval-closed-a")));
+    await assertFails(getDoc(doc(hrDb, "performanceReports", "report-closed-a")));
+    await assertSucceeds(getDoc(doc(adminDb, "evaluations", "eval-closed-a")));
+    await assertSucceeds(updateDoc(doc(adminDb, "evaluationPeriods", "period-closed"), { status: "closed" }));
+    await assertSucceeds(getDoc(doc(hrDb, "evaluations", "eval-closed-a")));
+  });
+
   it("rejects HR access until the account email is verified", async () => {
     const db = authenticatedDb("hr-unverified", "hr", "dept-a", false);
     await assertFails(getDoc(doc(db, "teachers", "teacher-a")));
