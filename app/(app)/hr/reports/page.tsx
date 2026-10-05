@@ -14,6 +14,7 @@ import { db, firebaseReady } from "@/lib/firebase/client";
 import { useAuth } from "@/lib/firebase/auth-context";
 import { PageHeader, FormField, inputCls } from "@/components/data-table";
 import { TeacherEvaluationReport } from "@/components/hr/teacher-evaluation-report";
+import { SchoolwideAnalytics } from "@/components/reports/schoolwide-analytics";
 import {
   exportTeacherEvaluationReportExcel,
   exportTeacherEvaluationReportPDF,
@@ -213,6 +214,8 @@ export default function HrReportsPage() {
         title="Teacher Evaluation Reports"
         description="Build confidential reports from released anonymous results."
       />
+
+      <SchoolwideAnalytics />
 
       {error ? (
         <div className="flex flex-col gap-3 border-l-4 border-rose-500 bg-rose-50 p-4 text-rose-800 dark:bg-rose-500/10 dark:text-rose-200 sm:flex-row sm:items-center">

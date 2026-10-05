@@ -11,6 +11,7 @@ import {
 import { collection, getDocs } from "firebase/firestore";
 import { db } from "@/lib/firebase/client";
 import { FormField, inputCls, PageHeader } from "@/components/data-table";
+import { SchoolwideAnalytics } from "@/components/reports/schoolwide-analytics";
 import {
   exportRowsToExcel,
   exportRowsToPDF,
@@ -435,6 +436,8 @@ export default function AdminReportsPage() {
           </div>
         }
       />
+
+      <SchoolwideAnalytics />
 
       <div className="mb-5 inline-flex rounded-lg bg-slate-100 p-1 dark:bg-slate-800">
         <button type="button" onClick={() => setMode("responses")} className={`rounded-md px-4 py-2 text-sm font-semibold ${mode === "responses" ? "bg-white shadow-sm dark:bg-slate-900" : "text-slate-500"}`}>Anonymous responses</button>

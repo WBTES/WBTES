@@ -8,6 +8,7 @@ import {
   ResponsiveContainer, Tooltip, XAxis, YAxis,
 } from "recharts";
 import { PageHeader, inputCls } from "@/components/data-table";
+import { SchoolwideAnalytics } from "@/components/reports/schoolwide-analytics";
 import { authenticatedFetch, readApiResponse } from "@/lib/authenticated-fetch";
 import type { DepartmentHeadReport } from "@/lib/types";
 import toast from "react-hot-toast";
@@ -87,6 +88,7 @@ export default function DepartmentHeadReportsPage() {
   return (
     <div className="space-y-6">
       <PageHeader title="School-wide Reports" description="Review participation and released aggregate results without exposing student identities or raw comments." />
+      <SchoolwideAnalytics />
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <select aria-label="Evaluation period" value={periodId} onChange={(event) => choosePeriod(event.target.value)} className={`${inputCls} sm:max-w-sm`}>
           <option value="">All closed periods</option>
