@@ -50,6 +50,43 @@ test("Education responses, averages and task completion appear under Education",
   assert.equal(data.departmentCounts.reduce((sum, item) => sum + item.evaluations, 0), data.totalEvaluations);
 });
 
+test("the saved EDUCATION department code uses the EDUC chart label", () => {
+  const input = fixture();
+  input.departments[1] = { ...input.departments[1], code: "EDUCATION", name: "Dean of Education" };
+  const data = buildAnalytics(input);
+  assert.equal(data.departmentCounts[1].name, "EDUC");
+  assert.equal(data.departmentAverages[1].name, "EDUC");
+  assert.equal(data.completionByDepartment[1].department, "EDUC");
+});
+
+test("saved legacy responses without assignment IDs remain counted and rated", () => {
+  const input = fixture();
+  delete input.evaluations[0].assignmentId;
+  const data = buildAnalytics(input);
+  assert.equal(data.totalEvaluations, 2);
+  assert.equal(data.releasedEvaluations, 2);
+  assert.equal(data.averageRating, 4.5);
+  assert.equal(data.departmentCounts[0].evaluations, 2);
+  assert.equal(data.topTeachers[0].responses, 2);
+  assert.equal(data.completionByDepartment[0].completed, 2);
+});
+
+test("the overall rating is weighted by saved responses, not teacher averages", () => {
+  const input = fixture();
+  input.teachers.push({ id: "teacher2", displayName: "Teacher Two", departmentId: "educ" });
+  input.assignments.push({ id: "assignment2", teacherId: "teacher2", subjectId: "subject2", departmentId: "educ", periodId: "period1", studentIds: ["student3"] });
+  input.evaluations.push({ id: "evaluation3", assignmentId: "assignment2", teacherId: "teacher2", subjectId: "subject2", departmentId: "educ", periodId: "period1", averageScore: 2 });
+  input.completions.push({ id: "completion3", assignmentId: "assignment2", studentId: "student3", periodId: "period1" });
+  const data = buildAnalytics(input);
+  assert.equal(data.totalEvaluations, 3);
+  assert.equal(data.releasedEvaluations, 3);
+  assert.equal(data.averageRating, 3.67);
+  assert.equal(data.departmentAverages[0].average, 4.5);
+  assert.equal(data.departmentAverages[1].average, 2);
+  assert.equal(data.departmentCounts.reduce((sum, item) => sum + item.evaluations, 0), 3);
+  assert.equal(data.completionByDepartment.reduce((sum, item) => sum + item.completed + item.pending, 0), 3);
+});
+
 test("partial assignments count received responses but do not release ratings", () => {
   const input = fixture();
   input.evaluations.pop();

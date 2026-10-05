@@ -116,6 +116,7 @@ export function buildAnalytics(input: AnalyticsInput): AnalyticsData {
 
 function departmentLabel(department: Department) {
   const code = department.code?.trim().toUpperCase();
+  if (code === "EDUCATION") return "EDUC";
   if (code === "CABAIT" || code === "EDUC") return code;
   return department.name?.trim() || code || "Unnamed department";
 }
