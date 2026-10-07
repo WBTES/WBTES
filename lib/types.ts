@@ -159,6 +159,7 @@ export interface TeacherAssignment {
 export interface DepartmentTeacherProgress {
   teacherId: string;
   assignedTasks: number;
+  completedTasks: number;
   submittedResponses: number;
   completionRate: number;
   releasedEvaluations: number;
@@ -170,6 +171,7 @@ export interface DepartmentOverview {
   teacherCount: number;
   activePeriods: number;
   assignedTasks: number;
+  completedTasks: number;
   submittedResponses: number;
   pendingTasks: number;
   completionRate: number;
@@ -177,6 +179,20 @@ export interface DepartmentOverview {
   releasedEvaluations: number;
   averageRating: number | null;
   teacherProgress: DepartmentTeacherProgress[];
+  adminSummary?: {
+    students: number;
+    teachers: number;
+    departments: number;
+    evaluations: number;
+    assignedTasks: number;
+    completedTasks: number;
+    pendingTasks: number;
+    completedStudents: number;
+    pendingStudents: number;
+    completionRate: number;
+    finalizedResponses: number;
+    averageRating: number | null;
+  };
 }
 
 export interface DepartmentHeadTheme {
@@ -193,6 +209,7 @@ export interface DepartmentHeadReport {
   periods: Array<{ id: string; name: string; endDate: number }>;
   teacherCount: number;
   responseCount: number;
+  submittedResponses: number;
   averageRating: number | null;
   resultsProtected: boolean;
   categories: CategoryAverage[];

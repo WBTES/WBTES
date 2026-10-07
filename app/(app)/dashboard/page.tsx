@@ -19,13 +19,12 @@ import {
   RefreshCw,
 } from "lucide-react";
 import { useAuth } from "@/lib/firebase/auth-context";
-import { collection, getCountFromServer, query, where, getDocs } from "firebase/firestore";
+import { collection, query, where, getDocs } from "firebase/firestore";
 import { db, firebaseReady } from "@/lib/firebase/client";
-import type { DepartmentOverview, Evaluation, EvaluationCompletion, EvaluationPeriod, TeacherAssignment } from "@/lib/types";
+import type { DepartmentOverview, EvaluationCompletion, EvaluationPeriod, TeacherAssignment } from "@/lib/types";
 import { AnnouncementFeed, useVisibleAnnouncements } from "@/components/announcement-feed";
 import { fmtDateTime, fmtRelative } from "@/lib/utils-extras";
 import { authenticatedFetch, readApiResponse } from "@/lib/authenticated-fetch";
-import { reportableEvaluations } from "@/lib/evaluation-results";
 
 export default function DashboardOverview() {
   const { user, profile, loading } = useAuth();
@@ -33,112 +32,49 @@ export default function DashboardOverview() {
   const [stats, setStats] = React.useState<Record<string, number | string>>({});
   const [loadingStats, setLoadingStats] = React.useState(true);
   const [statsError, setStatsError] = React.useState("");
+  const loadInProgress = React.useRef(false);
 
   React.useEffect(() => {
     if (!loading && !user) router.push("/login");
   }, [user, loading, router]);
 
   const loadStats = React.useCallback(async () => {
-    if (!profile) return;
+    if (!profile || loadInProgress.current) return;
+    loadInProgress.current = true;
     setLoadingStats(true);
     setStatsError("");
     try {
-      if (profile.role === "admin") {
-        // Run each count independently so one failure doesn't break all stats
-        const safe = async <T,>(p: Promise<T>, fallback: T): Promise<T> => {
-          try { return await p; } catch (e) { console.warn("stat load failed:", e); return fallback; }
-        };
-        const [users, teachers, students, depts, periods, evals] = await Promise.all([
-          safe(getCountFromServer(collection(db, "users")), { data: () => ({ count: 0 }) } as any),
-          safe(getCountFromServer(collection(db, "teachers")), { data: () => ({ count: 0 }) } as any),
-          safe(getCountFromServer(query(collection(db, "users"), where("role", "==", "student"))), { data: () => ({ count: 0 }) } as any),
-          safe(getCountFromServer(collection(db, "departments")), { data: () => ({ count: 0 }) } as any),
-          safe(getCountFromServer(collection(db, "evaluationPeriods")), { data: () => ({ count: 0 }) } as any),
-          safe(getCountFromServer(collection(db, "evaluations")), { data: () => ({ count: 0 }) } as any),
-        ]);
-        const evalCount = evals.data().count;
-        // Compute average rating + completion in a single pass
-        let totalScore = 0;
-        let reportableEvaluationCount = 0;
-        let totalSlots = 0;
-        let completedStudents = 0;
-        let pendingStudents = 0;
-        let completedSlots = 0;
-        try {
-          const [evalsSnap, assignsSnap, completionSnap] = await Promise.all([
-            getDocs(collection(db, "evaluations")),
-            getDocs(collection(db, "teacherAssignments")),
-            getDocs(collection(db, "evaluationCompletions")),
-          ]);
-          const slots = new Map<string, { studentId: string; completed: boolean }>();
-          const assignmentRows = assignsSnap.docs.map((d) => ({
-            id: d.id,
-            ...(d.data() as Omit<TeacherAssignment, "id">),
-          }));
-          const completionRows = completionSnap.docs.map((d) => ({
-            id: d.id,
-            ...(d.data() as Omit<EvaluationCompletion, "id">),
-          }));
-          const evaluationRows = evalsSnap.docs.map((d) => ({
-            id: d.id,
-            ...(d.data() as Omit<Evaluation, "id">),
-          }));
-          const finalEvaluationRows = reportableEvaluations(evaluationRows, assignmentRows, completionRows);
-          reportableEvaluationCount = finalEvaluationRows.length;
-          finalEvaluationRows.forEach((data) => {
-            if (typeof data.averageScore === "number") totalScore += data.averageScore;
+      if (profile.role === "admin" || profile.role === "hr" || profile.role === "department_head") {
+        const response = await authenticatedFetch("/api/department/overview");
+        const overview = await readApiResponse<DepartmentOverview>(response);
+        if (profile.role === "admin") {
+          const summary = overview.adminSummary;
+          if (!summary) throw new Error("Admin statistics were not returned. Please refresh and retry.");
+          setStats({
+            students: summary.students,
+            teachers: summary.teachers,
+            depts: summary.departments,
+            evaluations: summary.evaluations,
+            completedStudents: summary.completedStudents,
+            pendingStudents: summary.pendingStudents,
+            completion: summary.completionRate,
+            avg: summary.averageRating?.toFixed(2) ?? "--",
           });
-          assignsSnap.forEach((d) => {
-            const data = d.data() as TeacherAssignment;
-            if (!Array.isArray(data.studentIds)) return;
-            data.studentIds.forEach((studentId) => {
-              const key = `${studentId}_${d.id}`;
-              if (!slots.has(key)) {
-                slots.set(key, { studentId, completed: false });
-              }
-            });
+        } else {
+          setStats({
+            teachers: overview.teacherCount,
+            evaluations: overview.releasedEvaluations,
+            activePeriods: overview.activePeriods,
+            closedPeriods: overview.releasedPeriods,
+            assignedTasks: overview.assignedTasks,
+            completedTasks: overview.completedTasks,
+            responses: overview.submittedResponses,
+            pendingTasks: overview.pendingTasks,
+            completion: overview.completionRate,
+            avg: overview.releasedEvaluations === 0 ? "--" : overview.averageRating === null ? "Protected" : overview.averageRating.toFixed(2),
+            releasedPeriods: overview.releasedPeriods,
           });
-          completionSnap.forEach((d) => {
-            const completion = d.data() as EvaluationCompletion;
-            const slot = slots.get(
-              `${completion.studentId}_${completion.assignmentId}`
-            );
-            if (slot) slot.completed = true;
-          });
-          totalSlots = slots.size;
-          completedSlots = [...slots.values()].filter((slot) => slot.completed).length;
-          const progress = new Map<string, { assigned: number; completed: number }>();
-          slots.forEach((slot) => {
-            const item = progress.get(slot.studentId) ?? { assigned: 0, completed: 0 };
-            item.assigned += 1;
-            if (slot.completed) item.completed += 1;
-            progress.set(slot.studentId, item);
-          });
-          completedStudents = [...progress.values()].filter(
-            (item) => item.assigned > 0 && item.completed === item.assigned
-          ).length;
-          pendingStudents = [...progress.values()].filter(
-            (item) => item.completed < item.assigned
-          ).length;
-        } catch (e) {
-          console.warn("admin avg/completion calc failed:", e);
         }
-        const avg = reportableEvaluationCount > 0
-          ? (totalScore / reportableEvaluationCount).toFixed(2)
-          : "—";
-        const completion = totalSlots > 0 ? Math.round((completedSlots / totalSlots) * 100) : 0;
-        setStats({
-          users: users.data().count,
-          teachers: teachers.data().count,
-          students: students.data().count,
-          depts: depts.data().count,
-          periods: periods.data().count,
-          evaluations: evalCount,
-          avg,
-          completion,
-          completedStudents,
-          pendingStudents,
-        });
       } else if (profile.role === "student") {
         const safe = async <T,>(p: Promise<T>, fallback: T): Promise<T> => {
           try { return await p; } catch (e) { console.warn("stat load failed:", e); return fallback; }
@@ -175,37 +111,12 @@ export default function DashboardOverview() {
           deadline: activePeriods[0]?.endDate ?? 0,
           periodName: activePeriods[0]?.name ?? "",
         });
-      } else if (profile.role === "department_head" || profile.role === "hr") {
-        try {
-          const response = await authenticatedFetch("/api/department/overview");
-          const overview = await readApiResponse<DepartmentOverview>(response);
-          setStats({
-            teachers: overview.teacherCount,
-            evaluations: overview.releasedEvaluations,
-            activePeriods: overview.activePeriods,
-            closedPeriods: overview.releasedPeriods,
-            assignedTasks: overview.assignedTasks,
-            responses: overview.submittedResponses,
-            pendingTasks: overview.pendingTasks,
-            completion: overview.completionRate,
-            avg: overview.releasedEvaluations === 0
-              ? "--"
-              : overview.averageRating === null
-                ? "Protected"
-                : overview.averageRating.toFixed(2),
-            releasedPeriods: overview.releasedPeriods,
-          });
-        } catch (e) {
-          console.warn("HR dashboard stat load failed:", e);
-          setStatsError(e instanceof Error ? e.message : "Department statistics could not be loaded.");
-        }
       }
     } catch (e) {
       console.error("dashboard stats error:", e);
-      if (profile.role === "department_head" || profile.role === "hr") {
-        setStatsError(e instanceof Error ? e.message : "Department statistics could not be loaded.");
-      }
+      setStatsError(e instanceof Error ? e.message : "Dashboard statistics could not be loaded.");
     } finally {
+      loadInProgress.current = false;
       setLoadingStats(false);
     }
   }, [profile, user]);
@@ -213,6 +124,10 @@ export default function DashboardOverview() {
   React.useEffect(() => {
     if (!profile || !firebaseReady) return;
     loadStats();
+    if (profile.role === "student") return;
+    const refresh = () => { if (!document.hidden) void loadStats(); };
+    window.addEventListener("focus", refresh);
+    return () => window.removeEventListener("focus", refresh);
   }, [profile, loadStats]);
 
   if (loading || !profile) {
@@ -225,7 +140,8 @@ export default function DashboardOverview() {
 
   return (
     <div className="space-y-6">
-      <div>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
         <h1 className="text-2xl font-bold tracking-tight sm:text-3xl">
           Welcome back, {profile.displayName?.split(" ")[0]} 👋
         </h1>
@@ -235,6 +151,8 @@ export default function DashboardOverview() {
           {profile.role === "department_head" && "Monitor school-wide outcomes and privacy-protected feedback trends."}
           {profile.role === "hr" && "Review school-wide results and anonymous student feedback."}
         </p>
+        </div>
+        {profile.role !== "student" && firebaseReady && <button type="button" onClick={() => void loadStats()} disabled={loadingStats} aria-label="Refresh dashboard statistics" title="Refresh dashboard statistics" className="btn-secondary"><RefreshCw className={`h-4 w-4 ${loadingStats ? "animate-spin" : ""}`} /></button>}
       </div>
 
       {!firebaseReady && (
@@ -253,12 +171,15 @@ export default function DashboardOverview() {
       )}
 
       {/* Role-specific overview content */}
-      {profile.role === "admin" && <AdminOverview stats={stats} loading={loadingStats} />}
+      {profile.role === "admin" && <>
+        {statsError && <StatisticsError error={statsError} onRetry={loadStats} />}
+        <AdminOverview stats={stats} loading={loadingStats && Object.keys(stats).length === 0} />
+      </>}
       {profile.role === "student" && <StudentOverview stats={stats} loading={loadingStats} />}
       {profile.role === "department_head" && (
         <DeptHeadOverview
           stats={stats}
-          loading={loadingStats}
+          loading={loadingStats && Object.keys(stats).length === 0}
           error={statsError}
           onRetry={loadStats}
         />
@@ -266,7 +187,7 @@ export default function DashboardOverview() {
       {profile.role === "hr" && (
         <DeptHeadOverview
           stats={stats}
-          loading={loadingStats}
+          loading={loadingStats && Object.keys(stats).length === 0}
           error={statsError}
           onRetry={loadStats}
           detailed
@@ -274,6 +195,14 @@ export default function DashboardOverview() {
       )}
     </div>
   );
+}
+
+function StatisticsError({ error, onRetry }: { error: string; onRetry: () => void }) {
+  return <div role="alert" className="flex flex-col gap-3 border-l-4 border-rose-500 bg-rose-50 p-4 text-rose-800 dark:bg-rose-500/10 dark:text-rose-200 sm:flex-row sm:items-center">
+    <CircleAlert className="h-5 w-5 shrink-0" />
+    <p className="min-w-0 flex-1 text-sm">{error}</p>
+    <button type="button" onClick={onRetry} className="btn-secondary shrink-0"><RefreshCw className="h-4 w-4" /> Retry</button>
+  </div>;
 }
 
 function StatCard({ label, value, icon: Icon, iconBg }: { label: string; value: React.ReactNode; icon: React.ComponentType<{ className?: string }>; iconBg: string }) {
@@ -301,15 +230,15 @@ function AdminOverview({ stats, loading }: { stats: Record<string, number | stri
   return (
     <>
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <StatCard label="Students" value={loading ? "..." : stats.students ?? 0} icon={Users} iconBg="bg-emerald-600 text-white" />
-        <StatCard label="Teachers" value={loading ? "..." : stats.teachers ?? 0} icon={Users} iconBg="bg-brand-600 text-white" />
-        <StatCard label="Departments" value={loading ? "..." : stats.depts ?? 0} icon={Building2} iconBg="bg-slate-800 dark:bg-slate-700 text-white" />
-        <StatCard label="Evaluations" value={loading ? "..." : stats.evaluations ?? 0} icon={ClipboardList} iconBg="bg-slate-900 dark:bg-white text-white dark:text-slate-900" />
+        <StatCard label="Students" value={loading ? "..." : stats.students ?? "--"} icon={Users} iconBg="bg-emerald-600 text-white" />
+        <StatCard label="Teachers" value={loading ? "..." : stats.teachers ?? "--"} icon={Users} iconBg="bg-brand-600 text-white" />
+        <StatCard label="Departments" value={loading ? "..." : stats.depts ?? "--"} icon={Building2} iconBg="bg-slate-800 dark:bg-slate-700 text-white" />
+        <StatCard label="Evaluations" value={loading ? "..." : stats.evaluations ?? "--"} icon={ClipboardList} iconBg="bg-slate-900 dark:bg-white text-white dark:text-slate-900" />
       </div>
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <StatCard label="Students completed" value={loading ? "..." : stats.completedStudents ?? 0} icon={CheckCircle2} iconBg="bg-emerald-600 text-white" />
-        <StatCard label="Students pending" value={loading ? "..." : stats.pendingStudents ?? 0} icon={Clock3} iconBg="bg-amber-500 text-white" />
-        <StatCard label="Completion rate" value={loading ? "..." : `${stats.completion ?? 0}%`} icon={BarChart3} iconBg="bg-brand-600 text-white" />
+        <StatCard label="Students completed" value={loading ? "..." : stats.completedStudents ?? "--"} icon={CheckCircle2} iconBg="bg-emerald-600 text-white" />
+        <StatCard label="Students pending" value={loading ? "..." : stats.pendingStudents ?? "--"} icon={Clock3} iconBg="bg-amber-500 text-white" />
+        <StatCard label="Completion rate" value={loading ? "..." : stats.completion === undefined ? "--" : `${stats.completion}%`} icon={BarChart3} iconBg="bg-brand-600 text-white" />
         <StatCard label="Average rating" value={loading ? "..." : stats.avg ?? "—"} icon={Star} iconBg="bg-slate-800 dark:bg-slate-700 text-white" />
       </div>
 
@@ -433,30 +362,22 @@ function DeptHeadOverview({
 }) {
   return (
     <>
-      {error && (
-        <div className="flex flex-col gap-3 border-l-4 border-rose-500 bg-rose-50 p-4 text-rose-800 dark:bg-rose-500/10 dark:text-rose-200 sm:flex-row sm:items-center">
-          <CircleAlert className="h-5 w-5 shrink-0" />
-          <p className="min-w-0 flex-1 text-sm">{error}</p>
-          <button type="button" onClick={onRetry} className="btn-secondary shrink-0">
-            <RefreshCw className="h-4 w-4" /> Retry
-          </button>
-        </div>
-      )}
+      {error && <StatisticsError error={error} onRetry={onRetry} />}
       {!loading && !error && Number(stats.releasedPeriods ?? 0) === 0 && (
         <div className="border-l-4 border-brand-500 bg-brand-50 p-4 text-sm text-brand-800 dark:bg-brand-500/10 dark:text-brand-200">
           Ratings, comments, and analysis become available after an evaluation period closes.
         </div>
       )}
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        <StatCard label="Active teachers" value={loading ? "..." : stats.teachers ?? 0} icon={Users} iconBg="bg-slate-900 dark:bg-white text-white dark:text-slate-900" />
-        <StatCard label="Open evaluation tasks" value={loading ? "..." : stats.assignedTasks ?? 0} icon={ClipboardList} iconBg="bg-brand-600 text-white" />
-        <StatCard label="Open-period responses" value={loading ? "..." : stats.responses ?? 0} icon={CheckCircle2} iconBg="bg-emerald-600 text-white" />
-        <StatCard label="Open completion rate" value={loading ? "..." : `${stats.completion ?? 0}%`} icon={BarChart3} iconBg="bg-amber-500 text-white" />
-        <StatCard label="Closed periods" value={loading ? "..." : stats.closedPeriods ?? 0} icon={Calendar} iconBg="bg-slate-800 dark:bg-slate-700 text-white" />
-        <StatCard label="Released responses" value={loading ? "..." : stats.evaluations ?? 0} icon={CheckCircle2} iconBg="bg-cyan-600 text-white" />
+        <StatCard label="Active teachers" value={loading ? "..." : stats.teachers ?? "--"} icon={Users} iconBg="bg-slate-900 dark:bg-white text-white dark:text-slate-900" />
+        <StatCard label="Open evaluation tasks" value={loading ? "..." : stats.assignedTasks ?? "--"} icon={ClipboardList} iconBg="bg-brand-600 text-white" />
+        <StatCard label="Open-period responses" value={loading ? "..." : stats.responses ?? "--"} icon={CheckCircle2} iconBg="bg-emerald-600 text-white" />
+        <StatCard label="Open completion rate" value={loading ? "..." : stats.completion === undefined ? "--" : `${stats.completion}%`} icon={BarChart3} iconBg="bg-amber-500 text-white" />
+        <StatCard label="Closed periods" value={loading ? "..." : stats.closedPeriods ?? "--"} icon={Calendar} iconBg="bg-slate-800 dark:bg-slate-700 text-white" />
+        <StatCard label="Released responses" value={loading ? "..." : stats.evaluations ?? "--"} icon={CheckCircle2} iconBg="bg-cyan-600 text-white" />
         <StatCard label="Released average" value={loading ? "..." : stats.avg ?? "--"} icon={Star} iconBg="bg-emerald-600 text-white" />
       </div>
-      <div className="rounded-2xl border border-slate-200/80 bg-white p-6 shadow-sm dark:border-slate-800/80 dark:bg-slate-900">
+      {stats.activePeriods !== undefined && <div className="rounded-2xl border border-slate-200/80 bg-white p-6 shadow-sm dark:border-slate-800/80 dark:bg-slate-900">
         <h2 className="text-base font-semibold text-slate-900 dark:text-white">School-wide overview</h2>
         <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
           {Number(stats.activePeriods ?? 0) > 0
@@ -464,7 +385,7 @@ function DeptHeadOverview({
             : "There is no open evaluation period."}
         </p>
         <p className="mt-2 text-xs text-slate-500">
-          Closed-period results: {stats.evaluations ?? 0} submitted response{Number(stats.evaluations ?? 0) === 1 ? "" : "s"} across {stats.closedPeriods ?? 0} closed period{Number(stats.closedPeriods ?? 0) === 1 ? "" : "s"}.
+          Closed-period results: {stats.evaluations ?? 0} finalized response{Number(stats.evaluations ?? 0) === 1 ? "" : "s"} across {stats.closedPeriods ?? 0} closed period{Number(stats.closedPeriods ?? 0) === 1 ? "" : "s"}.
         </p>
         <div className="mt-4 flex flex-wrap gap-2">
           {detailed ? (
@@ -478,7 +399,7 @@ function DeptHeadOverview({
             <Link href="/department-head/reports" className="btn-primary">View school-wide reports</Link>
           )}
         </div>
-      </div>
+      </div>}
     </>
   );
 }

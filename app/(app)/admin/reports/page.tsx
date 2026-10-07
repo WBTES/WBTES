@@ -6,12 +6,12 @@ import {
   FileSpreadsheet,
   RefreshCcw,
   Search,
-  Sparkles,
 } from "lucide-react";
 import { collection, getDocs } from "firebase/firestore";
 import { db } from "@/lib/firebase/client";
 import { FormField, inputCls, PageHeader } from "@/components/data-table";
 import { SchoolwideAnalytics } from "@/components/reports/schoolwide-analytics";
+import { GeneratedPerformanceAnalysis } from "@/components/reports/generated-performance-analysis";
 import {
   exportRowsToExcel,
   exportRowsToPDF,
@@ -173,7 +173,7 @@ export default function AdminReportsPage() {
         evaluationRows,
         assignmentRows,
         completionRows
-      );
+      ).filter((evaluation) => Number.isFinite(evaluation.averageScore) && evaluation.averageScore >= 1 && evaluation.averageScore <= 5);
       const finalReportKeys = new Set(finalEvaluationRows.map((evaluation) =>
         `${evaluation.periodId}_${evaluation.teacherId}_${evaluation.subjectId}`
       ));
@@ -208,7 +208,7 @@ export default function AdminReportsPage() {
     return () => window.removeEventListener("focus", refresh);
   }, [load]);
 
-  const matchesResponseFilters = React.useCallback((evaluation: Evaluation) => {
+  const matchesResponseFilters = React.useCallback((evaluation: Evaluation, ignoreSearch = false) => {
     const period = periods.find((item) => item.id === evaluation.periodId);
     if (filters.teacherId && evaluation.teacherId !== filters.teacherId) return false;
     if (filters.departmentId && evaluation.departmentId !== filters.departmentId) return false;
@@ -218,6 +218,7 @@ export default function AdminReportsPage() {
     if (filters.semester && period?.semester !== filters.semester) return false;
     if (filters.academicYear && period?.academicYear !== filters.academicYear) return false;
     if (filters.status === "pending") return false;
+    if (ignoreSearch) return true;
     const needle = search.trim().toLowerCase();
     if (!needle) return true;
     return [
@@ -238,11 +239,16 @@ export default function AdminReportsPage() {
     teachers,
   ]);
   const filteredSubmitted = React.useMemo(
-    () => submittedEvaluations.filter(matchesResponseFilters),
+    () => submittedEvaluations.filter((evaluation) => matchesResponseFilters(evaluation)),
     [submittedEvaluations, matchesResponseFilters]
   );
   const filteredEvaluations = React.useMemo(
-    () => evaluations.filter(matchesResponseFilters),
+    () => evaluations.filter((evaluation) => matchesResponseFilters(evaluation)),
+    [evaluations, matchesResponseFilters]
+  );
+  // Search narrows saved analyses, not the response-weighted teacher average.
+  const analysisEvaluations = React.useMemo(
+    () => evaluations.filter((evaluation) => matchesResponseFilters(evaluation, true)),
     [evaluations, matchesResponseFilters]
   );
 
@@ -537,8 +543,9 @@ export default function AdminReportsPage() {
       </div>
 
       {mode === "responses" && filteredPerformanceReports.length > 0 && (
-        <AiAnalysisPreview
+        <GeneratedPerformanceAnalysis
           reports={filteredPerformanceReports}
+          evaluations={analysisEvaluations}
           teachers={teachers}
           subjects={subjects}
           periods={periods}
@@ -626,92 +633,6 @@ function buildProgressRows(
     });
   });
   return [...rows.values()];
-}
-
-function AiAnalysisPreview({
-  reports,
-  teachers,
-  subjects,
-  periods,
-}: {
-  reports: PerformanceReport[];
-  teachers: Teacher[];
-  subjects: Subject[];
-  periods: EvaluationPeriod[];
-}) {
-  return (
-    <section className="mb-5 border-y border-slate-200 py-5 dark:border-slate-800">
-      <div className="mb-4 flex items-center gap-2">
-        <Sparkles className="h-4 w-4 text-brand-600" />
-        <div>
-          <h2 className="text-sm font-semibold">Generated performance analysis</h2>
-          <p className="text-xs text-slate-500">
-            AI is used when configured; the same structured analysis remains available with built-in rules.
-          </p>
-        </div>
-      </div>
-      <div className="grid gap-3 lg:grid-cols-2">
-        {reports.slice(0, 12).map((report) => (
-          <article key={report.id} className="rounded-lg border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900">
-            <div className="flex flex-wrap items-start justify-between gap-2">
-              <div>
-                <h3 className="font-semibold">
-                  {teachers.find((item) => item.id === report.teacherId)?.displayName ?? "Teacher"}
-                </h3>
-                <p className="text-xs text-slate-500">
-                  {subjects.find((item) => item.id === report.subjectId)?.name ?? "Subject"} /{" "}
-                  {periods.find((item) => item.id === report.periodId)?.name ?? "Period"}
-                </p>
-              </div>
-              <span className="rounded-md bg-slate-100 px-2 py-1 text-xs font-semibold dark:bg-slate-800">
-                {report.averageScore.toFixed(2)} / 5
-              </span>
-            </div>
-            <p className="mt-3 text-sm leading-relaxed text-slate-600 dark:text-slate-400">
-              {report.summary}
-            </p>
-            <div className="mt-4 grid gap-3 sm:grid-cols-3">
-              <AnalysisList title="Strengths" items={report.strengths} />
-              <AnalysisList title="Weaknesses" items={report.weaknesses ?? []} />
-              <AnalysisList title="Recommendations" items={report.recommendations} />
-            </div>
-            {report.graphInsights.length > 0 && (
-              <div className="mt-4">
-                <AnalysisList title="Graph insights" items={report.graphInsights} />
-              </div>
-            )}
-            {report.commentAnalysis && (
-              <div className="mt-4 border-t border-slate-200 pt-3 dark:border-slate-800">
-                <p className="text-xs text-slate-500">
-                  {report.commentAnalysis.summary}
-                </p>
-                <div className="mt-2 flex flex-wrap gap-1.5">
-                  {report.commentAnalysis.themes.slice(0, 5).map((theme) => (
-                    <span key={theme.name} className="rounded-md border border-slate-200 px-2 py-1 text-[11px] dark:border-slate-700">
-                      {theme.name} ({theme.count})
-                    </span>
-                  ))}
-                </div>
-              </div>
-            )}
-          </article>
-        ))}
-      </div>
-    </section>
-  );
-}
-
-function AnalysisList({ title, items }: { title: string; items: string[] }) {
-  return (
-    <div>
-      <p className="text-[11px] font-semibold uppercase text-slate-500">{title}</p>
-      <ul className="mt-1.5 space-y-1 text-xs text-slate-600 dark:text-slate-400">
-        {items.length === 0
-          ? <li>None identified</li>
-          : items.slice(0, 4).map((item) => <li key={item}>- {item}</li>)}
-      </ul>
-    </div>
-  );
 }
 
 function ResponsePreview({

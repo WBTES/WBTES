@@ -52,19 +52,21 @@ export async function GET(request: Request) {
       id: item.id,
       ...(item.data() as Omit<EvaluationCompletion, "id">),
     }));
-    const allReleased = reportableEvaluations(allSubmitted, assignments, completions);
+    const allReleased = reportableEvaluations(allSubmitted, assignments, completions)
+      .filter((evaluation) => Number.isFinite(evaluation.averageScore) && evaluation.averageScore >= 1 && evaluation.averageScore <= 5);
     const selectedSubmitted = selectedPeriodId
       ? allSubmitted.filter((item) => item.periodId === selectedPeriodId)
       : allSubmitted;
     const selected = selectedPeriodId
       ? allReleased.filter((item) => item.periodId === selectedPeriodId)
       : allReleased;
-    const teachers = new Map(teacherDocs.docs.filter(
-      (item) => item.data().status !== "inactive"
-    ).map((item) => {
+    const teachers = new Map<string, Pick<Teacher, "id" | "displayName">>(teacherDocs.docs.map((item) => {
       const teacher = { id: item.id, ...(item.data() as Omit<Teacher, "id">) };
       return [item.id, teacher] as const;
     }));
+    allSubmitted.forEach((evaluation) => {
+      if (!teachers.has(evaluation.teacherId)) teachers.set(evaluation.teacherId, { id: evaluation.teacherId, displayName: "Archived teacher" });
+    });
     const questionCategories = new Map(questionDocs.docs.map((item) => {
       const question = item.data() as EvaluationQuestion;
       return [item.id, question.category || "General"] as const;
@@ -73,7 +75,7 @@ export async function GET(request: Request) {
     const categoryValues = new Map<string, number[]>();
     selected.forEach((evaluation) => {
       Object.entries(evaluation.ratings ?? {}).forEach(([questionId, value]) => {
-        if (typeof value !== "number") return;
+        if (typeof value !== "number" || !Number.isFinite(value) || value < 1 || value > 5) return;
         const category = questionCategories.get(questionId) ?? "General";
         categoryValues.set(category, [...(categoryValues.get(category) ?? []), value]);
       });
@@ -83,26 +85,24 @@ export async function GET(request: Request) {
     const analysis = protectedResults ? analyzeWeightedComments([]) : analyzeWeightedComments(comments);
 
     const teacherRows = [...teachers.values()].map((teacher) => {
-      const submittedRows = selectedSubmitted.filter((evaluation) => evaluation.teacherId === teacher.id);
       const rows = selected.filter((evaluation) => evaluation.teacherId === teacher.id);
       const isProtected = rows.length < MINIMUM_RESPONSES;
       return {
         teacherId: teacher.id,
         teacherName: teacher.displayName,
-        responses: submittedRows.length,
+        responses: rows.length,
         average: isProtected ? null : average(rows.map((row) => row.averageScore)),
         protected: isProtected,
       };
     }).sort((a, b) => b.responses - a.responses || a.teacherName.localeCompare(b.teacherName));
 
     const trends = periods.slice().reverse().map((period) => {
-      const submittedRows = allSubmitted.filter((evaluation) => evaluation.periodId === period.id);
       const rows = allReleased.filter((evaluation) => evaluation.periodId === period.id);
       return {
         periodId: period.id,
         periodName: period.name,
         endDate: period.endDate,
-        responses: submittedRows.length,
+        responses: rows.length,
         average: rows.length < MINIMUM_RESPONSES ? null : average(rows.map((row) => row.averageScore)),
       };
     });
@@ -113,8 +113,9 @@ export async function GET(request: Request) {
       minimumResponses: MINIMUM_RESPONSES,
       selectedPeriodId,
       periods: periods.map(({ id, name, endDate }) => ({ id, name, endDate })),
-      teacherCount: teachers.size,
-      responseCount: selectedSubmitted.length,
+      teacherCount: teacherDocs.docs.filter((item) => item.data().status !== "inactive").length,
+      responseCount: selected.length,
+      submittedResponses: selectedSubmitted.length,
       averageRating: protectedResults ? null : average(selected.map((row) => row.averageScore)),
       resultsProtected: protectedResults,
       categories: protectedResults ? [] : [...categoryValues.entries()].map(([category, values]) => ({
@@ -143,6 +144,6 @@ export async function GET(request: Request) {
 }
 
 function average(values: number[]) {
-  const valid = values.filter(Number.isFinite);
+  const valid = values.filter((value) => Number.isFinite(value) && value >= 1 && value <= 5);
   return valid.length ? Number((valid.reduce((sum, value) => sum + value, 0) / valid.length).toFixed(2)) : null;
 }

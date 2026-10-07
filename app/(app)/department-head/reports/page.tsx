@@ -115,7 +115,7 @@ function ReportBody({ report }: { report: DepartmentHeadReport }) {
 
   return <div className="space-y-6">
     <motion.div {...panelMotion} transition={{ duration: 0.35 }} className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
-      <Metric label="Teachers" value={report.teacherCount} detail="School-wide faculty" icon={Users} tone="brand" />
+      <Metric label="Active teachers" value={report.teacherCount} detail="School-wide faculty" icon={Users} tone="brand" />
       <Metric label="Closed periods" value={report.periods.length} detail="Available for reporting" icon={BarChart3} tone="brand" />
       <Metric label="Released responses" value={report.responseCount} detail="From closed periods" icon={BarChart3} tone="emerald" />
       <Metric label="Average rating" value={report.averageRating?.toFixed(2) ?? "Protected"} detail="Out of 5.00" icon={Star} tone="amber" />
@@ -127,7 +127,7 @@ function ReportBody({ report }: { report: DepartmentHeadReport }) {
         <div className="min-w-0 flex-1">
           <p className="font-semibold">Results are privacy protected</p>
           <p className="mt-1 text-amber-800/80 dark:text-amber-200/75">
-            The threshold counts submitted responses, not closed periods. This view has {report.responseCount} of {report.minimumResponses} required responses.
+            The threshold counts finalized responses, not closed periods. This view has {report.responseCount} of {report.minimumResponses} required finalized responses; {report.submittedResponses} responses have been submitted in total.
           </p>
           <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-amber-200/70 dark:bg-amber-950/60">
             <div

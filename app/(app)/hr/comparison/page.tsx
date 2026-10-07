@@ -94,11 +94,10 @@ export default function DeptComparisonPage() {
       });
       setTeacherProgress(
         departmentOverview.teacherProgress
-          .filter((item) => teachers[item.teacherId])
           .map((item) => ({
-            name: teachers[item.teacherId],
-            submitted: item.submittedResponses,
-            pending: Math.max(item.assignedTasks - item.submittedResponses, 0),
+            name: teachers[item.teacherId] ?? "Archived teacher",
+            submitted: item.completedTasks,
+            pending: Math.max(item.assignedTasks - item.completedTasks, 0),
             total: item.assignedTasks,
           }))
           .sort((a, b) => b.total - a.total || b.submitted - a.submitted)
@@ -212,9 +211,9 @@ export default function DeptComparisonPage() {
             />
             <Metric
               icon={Clock3}
-              label="Pending responses"
+              label="Pending evaluations"
               value={overview.pendingTasks.toLocaleString()}
-              detail={overview.pendingTasks === 0 ? "All assigned responses received" : "Awaiting submission"}
+              detail={overview.pendingTasks === 0 ? "All assigned evaluations completed" : "Awaiting submission"}
               tone="amber"
             />
             <Metric
@@ -335,7 +334,7 @@ function ProgressChart({ data, reduceMotion }: { data: ProgressPoint[]; reduceMo
           <h3 className="text-sm font-semibold">Completion by teacher</h3>
         </div>
         <div className="flex items-center gap-3 text-[11px] text-slate-500">
-          <span className="inline-flex items-center gap-1.5"><i className="h-2 w-2 rounded-full bg-brand-500" />Received</span>
+          <span className="inline-flex items-center gap-1.5"><i className="h-2 w-2 rounded-full bg-brand-500" />Completed</span>
           <span className="inline-flex items-center gap-1.5"><i className="h-2 w-2 rounded-full bg-amber-400" />Pending</span>
         </div>
       </div>
@@ -357,7 +356,7 @@ function ProgressChart({ data, reduceMotion }: { data: ProgressPoint[]; reduceMo
             <Line
               type="monotone"
               dataKey="submitted"
-              name="Received"
+              name="Completed"
               stroke="#3366ff"
               strokeWidth={3}
               dot={{ r: 4, fill: "#3366ff", strokeWidth: 0 }}
@@ -386,7 +385,7 @@ function ProgressChart({ data, reduceMotion }: { data: ProgressPoint[]; reduceMo
 
 function ResponseDonut({ overview, reduceMotion }: { overview: DepartmentOverview; reduceMotion: boolean }) {
   const data = [
-    { name: "Received", value: overview.submittedResponses, color: "#10b981" },
+    { name: "Completed", value: overview.completedTasks, color: "#10b981" },
     { name: "Pending", value: overview.pendingTasks, color: "#fbbf24" },
   ].filter((item) => item.value > 0);
 
@@ -394,7 +393,7 @@ function ResponseDonut({ overview, reduceMotion }: { overview: DepartmentOvervie
     <div className="h-full rounded-lg border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900">
       <div className="flex items-center gap-2">
         <Activity className="h-4 w-4 text-brand-500" />
-        <h3 className="text-sm font-semibold">Response status</h3>
+        <h3 className="text-sm font-semibold">Evaluation task status</h3>
       </div>
       <div className="relative mx-auto h-[230px] max-w-[300px]">
         <ResponsiveContainer width="100%" height="100%">
@@ -422,8 +421,8 @@ function ResponseDonut({ overview, reduceMotion }: { overview: DepartmentOvervie
       </div>
       <div className="grid grid-cols-2 gap-3 border-t border-slate-100 pt-3 text-center dark:border-slate-800">
         <div>
-          <p className="text-lg font-bold text-emerald-600 dark:text-emerald-400">{overview.submittedResponses}</p>
-          <p className="text-xs text-slate-500">Received</p>
+          <p className="text-lg font-bold text-emerald-600 dark:text-emerald-400">{overview.completedTasks}</p>
+          <p className="text-xs text-slate-500">Completed</p>
         </div>
         <div>
           <p className="text-lg font-bold text-amber-600 dark:text-amber-400">{overview.pendingTasks}</p>

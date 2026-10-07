@@ -89,7 +89,7 @@ export default function HrReportsPage() {
       setSubjects(subjectSnapshot.docs.map((item) => ({
         id: item.id,
         ...(item.data() as Omit<Subject, "id">),
-      })).sort((a, b) => a.code.localeCompare(b.code)));
+      })).sort((a, b) => (a.code || a.name).localeCompare(b.code || b.name)));
       setPrograms(programSnapshot.docs.map((item) => ({
         id: item.id,
         ...(item.data() as Omit<Program, "id">),
