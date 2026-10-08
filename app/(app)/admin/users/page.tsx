@@ -252,7 +252,7 @@ export default function AdminUsersPage() {
   };
 
   const deleteStudent = async (student: ManagedStudent) => {
-    if (!confirm(`Delete ${student.displayName}'s registration and login account? Anonymous responses will remain.`)) return;
+    if (!confirm(`Delete ${student.displayName}'s registration and login account? Anonymous responses will remain. The email and School ID cannot be registered again.`)) return;
     try {
       const response = await authenticatedFetch(
         `/api/admin/students?id=${encodeURIComponent(student.id)}`,
@@ -674,8 +674,8 @@ function StudentModal({
           <FormField label="Full name">
             <input required value={form.displayName} onChange={(event) => setForm({ ...form, displayName: event.target.value })} className={inputCls} />
           </FormField>
-          <FormField label="Student number">
-            <input value={form.studentNumber} onChange={(event) => setForm({ ...form, studentNumber: event.target.value })} className={inputCls} />
+          <FormField label="School ID">
+            <input required={Boolean(editing?.studentNumber)} maxLength={100} value={form.studentNumber} onChange={(event) => setForm({ ...form, studentNumber: event.target.value })} className={inputCls} />
           </FormField>
         </div>
         <FormField label="Registered school email" hint="Email cannot be changed after registration.">
@@ -830,7 +830,7 @@ function StudentProfileModal({
           <div className="grid gap-4 sm:grid-cols-2">
             <ProfileItem label="Student" value={student.displayName} />
             <ProfileItem label="School email" value={student.email} />
-            <ProfileItem label="Student number" value={student.studentNumber || "Not provided"} />
+            <ProfileItem label="School ID" value={student.studentNumber || "Not provided"} />
             <ProfileItem label="Program" value={program ? `${program.code} - ${program.name}` : student.course} />
             <ProfileItem label="Department" value={department?.name ?? "Not assigned"} />
             <ProfileItem label="Year and section" value={`${student.yearLevel} year / ${student.section}`} />

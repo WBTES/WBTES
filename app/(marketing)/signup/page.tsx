@@ -89,6 +89,7 @@ export default function SignupPage() {
       const result = await response.json() as {
         customToken?: string;
         error?: string;
+        warning?: string;
       };
       if (!response.ok) {
         throw new Error(result.error ?? "Student registration failed.");
@@ -98,6 +99,7 @@ export default function SignupPage() {
       }
       await completeStudentRegistration(result.customToken);
       toast.success("Account created. Welcome to WBTE.");
+      if (result.warning) toast.error(result.warning);
       router.replace("/dashboard");
     } catch (error) {
       toast.error(
@@ -167,10 +169,11 @@ export default function SignupPage() {
                         />
                       </div>
                     </Field>
-                    <Field label="Student number" htmlFor="signup-student-number">
+                    <Field label="School ID" htmlFor="signup-student-number">
                       <input
                         id="signup-student-number"
                         required
+                        maxLength={100}
                         value={form.studentNumber}
                         onChange={(event) => setForm({
                           ...form,

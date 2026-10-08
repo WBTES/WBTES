@@ -19,6 +19,7 @@ function loadModule(path, dependencies = {}) {
 
 const participationModule = loadModule("lib/report-participation.ts");
 const { buildReportParticipation, participationStatus } = participationModule;
+const { groupReportRatings } = loadModule("lib/report-ratings.ts");
 function exporters() {
   const pdfs = [];
   const books = [];
@@ -157,4 +158,38 @@ test("historical responses with unavailable assignments are not labeled complete
   const summary = Object.fromEntries(XLSX.utils.sheet_to_json(exporter.books[0].workbook.Sheets.Summary, { header: 1 }));
   assert.equal(summary["Report status"], "Historical (assignment unavailable)");
   assert.equal(summary["Submitted responses"], 3);
+});
+
+test("PDF includes grouped finalized ratings without dropping anonymous response details", () => {
+  const input = fixture(3, 3);
+  const exporter = exporters();
+  exporter.exportToPDF(input.evaluations, meta, lookups, { participation: input.participation, finalizedRatings: groupReportRatings(input.evaluations) });
+  assert.equal(exporter.tables[1].body.length, 1);
+  assert.deepEqual(exporter.tables[1].body[0], ["Teacher One", "Subject One", "CABAIT", "", "", "First semester", 3, "4.33"]);
+  assert.equal(exporter.tables[2].body.length, 3);
+  assert.ok(exporter.pdfs[0].document.output().includes("Finalized ratings"));
+});
+
+test("Excel includes one finalized summary row and keeps every anonymous evaluation", () => {
+  const input = fixture(3, 3);
+  const exporter = exporters();
+  exporter.exportToExcel(input.evaluations, meta, lookups, { finalizedRatings: groupReportRatings(input.evaluations) });
+  const workbook = exporter.books[0].workbook;
+  const summaries = XLSX.utils.sheet_to_json(workbook.Sheets["Finalized Ratings"]);
+  assert.equal(summaries.length, 1);
+  assert.equal(summaries[0]["Finalized responses"], 3);
+  assert.equal(summaries[0]["Average rating"], 4.33);
+  assert.equal(XLSX.utils.sheet_to_json(workbook.Sheets.Evaluations).length, 3);
+});
+
+test("partial exports distinguish finalized summaries from preliminary response details", () => {
+  const input = fixture(3, 43);
+  const exporter = exporters();
+  exporter.exportToExcel(input.evaluations, meta, lookups, { participation: input.participation, partial: true, finalizedRatings: [] });
+  const workbook = exporter.books[0].workbook;
+  assert.deepEqual(XLSX.utils.sheet_to_json(workbook.Sheets["Finalized Ratings"]), []);
+  assert.equal(XLSX.utils.sheet_to_json(workbook.Sheets.Evaluations).length, 3);
+  const summary = Object.fromEntries(XLSX.utils.sheet_to_json(workbook.Sheets.Summary, { header: 1 }));
+  assert.match(summary["Report status"], /^Partial/);
+  assert.equal(summary["Preliminary average"], 13 / 3);
 });

@@ -13,6 +13,7 @@ import {
 } from "@/lib/server/require-admin";
 import { assertAllowedSchoolEmail } from "@/lib/server/school-email";
 import { deliverVerificationEmail } from "@/lib/server/verification-email";
+import { claimStudentIdentities } from "@/lib/server/student-identities";
 import type { AppUser } from "@/lib/types";
 
 export const runtime = "nodejs";
@@ -37,42 +38,49 @@ export async function POST(request: Request) {
       const registryRef = adminDb
         .collection("studentRegistry")
         .doc(emailDocumentId(email));
-      const registrySnapshot = await registryRef.get();
-      if (!registrySnapshot.exists || registrySnapshot.data()?.status === "disabled") {
-        throw new ApiError(
-          403,
-          "This email has no WBTE student registration. Use Create account before signing in."
-        );
-      }
-      const registry = registrySnapshot.data()!;
-      const now = Date.now();
-      const registryStatus = registry.status === "pending"
-        ? "pending"
-        : "active";
-      const profile: Omit<AppUser, "uid"> = {
-        email,
-        emailNormalized: email,
-        displayName: String(registry.displayName ?? decoded.name ?? email),
-        role: "student",
-        studentNumber: String(registry.studentNumber ?? ""),
-        programId: String(registry.programId ?? "") || null,
-        departmentId: String(registry.departmentId ?? "") || null,
-        course: String(registry.course ?? ""),
-        yearLevel: String(registry.yearLevel ?? ""),
-        section: String(registry.section ?? ""),
-        photoURL: optionalString(decoded.picture) || null,
-        status: registryStatus,
-        emailVerified: Boolean(decoded.email_verified),
-        createdAt: now,
-        updatedAt: now,
-      };
-      const batch = adminDb.batch();
-      batch.set(userRef, profile);
-      batch.set(registryRef, {
-        claimedUid: decoded.uid,
-        updatedAt: now,
-      }, { merge: true });
-      await batch.commit();
+      await adminDb.runTransaction(async (transaction) => {
+        const currentUser = await transaction.get(userRef);
+        if (currentUser.exists) return;
+        const registrySnapshot = await transaction.get(registryRef);
+        if (!registrySnapshot.exists || registrySnapshot.data()?.status === "disabled") {
+          throw new ApiError(
+            403,
+            "This email has no WBTE student registration. Use Create account before signing in."
+          );
+        }
+        const registry = registrySnapshot.data()!;
+        if (registry.claimedUid && registry.claimedUid !== decoded.uid) {
+          throw new ApiError(409, "This email is already linked to another student account.");
+        }
+        const now = Date.now();
+        const registryStatus = registry.status === "pending"
+          ? "pending"
+          : "active";
+        const profile: Omit<AppUser, "uid"> = {
+          email,
+          emailNormalized: email,
+          displayName: String(registry.displayName ?? decoded.name ?? email),
+          role: "student",
+          studentNumber: String(registry.studentNumber ?? ""),
+          studentNumberNormalized: String(registry.studentNumber ?? "").trim().toLowerCase(),
+          programId: String(registry.programId ?? "") || null,
+          departmentId: String(registry.departmentId ?? "") || null,
+          course: String(registry.course ?? ""),
+          yearLevel: String(registry.yearLevel ?? ""),
+          section: String(registry.section ?? ""),
+          photoURL: optionalString(decoded.picture) || null,
+          status: registryStatus,
+          emailVerified: Boolean(decoded.email_verified),
+          createdAt: now,
+          updatedAt: now,
+        };
+        await claimStudentIdentities(transaction, profile, registryRef.id, decoded.uid, true);
+        transaction.create(userRef, profile);
+        transaction.set(registryRef, {
+          claimedUid: decoded.uid,
+          updatedAt: now,
+        }, { merge: true });
+      });
       userSnapshot = await userRef.get();
     }
 
@@ -146,7 +154,7 @@ export async function POST(request: Request) {
 
     if (profile.role === "student") {
       assertAllowedSchoolEmail(email);
-      await ensureStudentRegistry(decoded.uid, profile, email);
+      profile = { ...profile, ...await ensureStudentRegistry(decoded.uid, profile, email) };
     }
     if (
       (profile.role === "student" || profile.role === "admin")
@@ -163,6 +171,10 @@ export async function POST(request: Request) {
       email,
       emailNormalized: email,
       emailVerified,
+      ...(profile.role === "student" ? {
+        studentNumber: profile.studentNumber ?? "",
+        studentNumberNormalized: profile.studentNumberNormalized ?? "",
+      } : {}),
       lastLoginAt: mode === "login" ? now : profile.lastLoginAt ?? null,
       updatedAt: now,
     }, { merge: true });
@@ -206,42 +218,32 @@ async function ensureStudentRegistry(
   const registryRef = adminDb
     .collection("studentRegistry")
     .doc(emailDocumentId(email));
-  const registry = await registryRef.get();
-  if (registry.exists) {
-    if (registry.data()?.status === "disabled") {
+  return adminDb.runTransaction(async (transaction) => {
+    const registry = await transaction.get(registryRef);
+    if (registry.exists && registry.data()?.status === "disabled") {
       throw new ApiError(403, "This student registration has been deactivated.");
     }
-    if (
-      registry.data()?.claimedUid
-      && registry.data()?.claimedUid !== uid
-    ) {
+    if (registry.data()?.claimedUid && registry.data()?.claimedUid !== uid) {
       throw new ApiError(409, "This school email is already linked to another account.");
     }
-    await registryRef.set({ claimedUid: uid, updatedAt: Date.now() }, { merge: true });
-    return;
-  }
-
-  // Existing student profiles are migrated into the registry once.
-  if (!profile.programId || !profile.departmentId) {
-    throw new ApiError(
-      403,
-      "Your student record is incomplete. Ask an administrator to assign your Program."
-    );
-  }
-  await registryRef.set({
-    email,
-    emailNormalized: email,
-    displayName: profile.displayName,
-    studentNumber: profile.studentNumber ?? "",
-    programId: profile.programId,
-    departmentId: profile.departmentId,
-    course: profile.course ?? "",
-    yearLevel: profile.yearLevel ?? "",
-    section: profile.section ?? "",
-    status: "active",
-    claimedUid: uid,
-    createdAt: Date.now(),
-    updatedAt: Date.now(),
+    if (!registry.exists && (!profile.programId || !profile.departmentId)) {
+      throw new ApiError(403, "Your student record is incomplete. Ask an administrator to assign your Program.");
+    }
+    const studentNumber = String(registry.data()?.studentNumber ?? profile.studentNumber ?? "").trim();
+    const studentNumberNormalized = studentNumber.toLowerCase();
+    await claimStudentIdentities(transaction, { email, studentNumber }, registryRef.id, uid, true);
+    const now = Date.now();
+    if (registry.exists) transaction.set(registryRef, {
+      claimedUid: uid, studentNumber, studentNumberNormalized, updatedAt: now,
+    }, { merge: true });
+    else transaction.create(registryRef, {
+      email, emailNormalized: email, displayName: profile.displayName,
+      studentNumber, studentNumberNormalized, programId: profile.programId,
+      departmentId: profile.departmentId, course: profile.course ?? "",
+      yearLevel: profile.yearLevel ?? "", section: profile.section ?? "",
+      status: "active", claimedUid: uid, createdAt: now, updatedAt: now,
+    });
+    return { studentNumber, studentNumberNormalized };
   });
 }
 

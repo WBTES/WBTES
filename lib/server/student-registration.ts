@@ -8,6 +8,7 @@ import {
 } from "@/lib/server/api-response";
 import { ApiError } from "@/lib/server/require-admin";
 import { assertAllowedSchoolEmail } from "@/lib/server/school-email";
+import { SCHOOL_ID_ALREADY_REGISTERED, studentIdentityKey } from "@/lib/server/student-identities";
 import type { Program } from "@/lib/types";
 
 export type StudentRegistrationInput = {
@@ -33,8 +34,11 @@ export async function validateStudentRegistration(
     throw new ApiError(400, "Student name must contain at least 2 characters.");
   }
 
+  if (typeof input.studentNumber === "string" && input.studentNumber.trim().length > 100) {
+    throw new ApiError(400, "School ID must contain at most 100 characters.");
+  }
   const studentNumber = options.requireStudentNumber
-    ? asString(input.studentNumber, "Student number", 100)
+    ? asString(input.studentNumber, "School ID", 100)
     : optionalString(input.studentNumber, 100);
   const programId = asString(input.programId, "Program", 200);
   const yearLevel = asString(input.yearLevel, "Year level", 50);
@@ -64,11 +68,11 @@ export async function validateStudentRegistration(
 }
 
 export async function assertStudentNumberAvailable(
-  studentNumber: string,
-  currentRegistrationId = ""
+  studentNumber: string
 ) {
   const normalized = studentNumber.trim().toLowerCase();
-  const [normalizedMatches, legacyMatches] = await Promise.all([
+  const [identity, normalizedMatches, legacyMatches, normalizedProfiles, legacyProfiles] = await Promise.all([
+    adminDb.collection("studentIdentities").doc(studentIdentityKey("school_id", normalized)).get(),
     adminDb
       .collection("studentRegistry")
       .where("studentNumberNormalized", "==", normalized)
@@ -79,13 +83,13 @@ export async function assertStudentNumberAvailable(
       .where("studentNumber", "==", studentNumber)
       .limit(2)
       .get(),
+    adminDb.collection("users").where("studentNumberNormalized", "==", normalized).limit(2).get(),
+    adminDb.collection("users").where("studentNumber", "==", studentNumber.trim()).limit(2).get(),
   ]);
-  const duplicate = [...normalizedMatches.docs, ...legacyMatches.docs]
-    .some((document) => document.id !== currentRegistrationId);
-  if (duplicate) {
+  if (identity.exists || normalizedMatches.docs.length || legacyMatches.docs.length || normalizedProfiles.docs.length || legacyProfiles.docs.length) {
     throw new ApiError(
       409,
-      "This student number already has a registration. Contact an administrator if it belongs to you."
+      SCHOOL_ID_ALREADY_REGISTERED
     );
   }
 }

@@ -10,8 +10,8 @@ import {
 import { writeAuditLog } from "@/lib/server/audit";
 import { synchronizeStudentAssignments } from "@/lib/server/assignment-sync";
 import { ApiError, requireAdmin } from "@/lib/server/require-admin";
+import { claimStudentIdentities } from "@/lib/server/student-identities";
 import {
-  assertStudentNumberAvailable,
   type StudentRegistrationInput,
   validateStudentRegistration,
 } from "@/lib/server/student-registration";
@@ -89,10 +89,7 @@ export async function PATCH(request: Request) {
     const registration = await validateStudentRegistration({
       ...body,
       email: existingData.email,
-    });
-    if (registration.studentNumber) {
-      await assertStudentNumberAvailable(registration.studentNumber, id);
-    }
+    }, { requireStudentNumber: Boolean(existingData.studentNumber) });
     const claimedUid = optionalString(existingData.claimedUid, 200);
     if (!claimedUid && status === "active") {
       throw new ApiError(
@@ -102,21 +99,18 @@ export async function PATCH(request: Request) {
     }
 
     const now = Date.now();
-    const batch = adminDb.batch();
-    batch.update(existingRef, {
-      ...registration,
-      status,
-      updatedAt: now,
-    });
-    if (claimedUid) {
-      batch.set(adminDb.collection("users").doc(claimedUid), {
-        ...registration,
-        role: "student",
-        status,
-        updatedAt: now,
+    await adminDb.runTransaction(async (transaction) => {
+      const current = await transaction.get(existingRef);
+      if (!current.exists) throw new ApiError(404, "Student record was not found.");
+      if (current.data()?.updatedAt !== existingData.updatedAt) {
+        throw new ApiError(409, "This student record changed. Refresh and try again.");
+      }
+      await claimStudentIdentities(transaction, registration, id, claimedUid, true);
+      transaction.update(existingRef, { ...registration, status, updatedAt: now });
+      if (claimedUid) transaction.set(adminDb.collection("users").doc(claimedUid), {
+        ...registration, role: "student", status, updatedAt: now,
       }, { merge: true });
-    }
-    await batch.commit();
+    });
 
     if (claimedUid) {
       await adminAuth.updateUser(claimedUid, {
@@ -179,6 +173,18 @@ export async function DELETE(request: Request) {
     }
     const claimedUid = optionalString(registry.data()?.claimedUid, 200);
     const email = String(registry.data()?.email ?? "");
+
+    await adminDb.runTransaction(async (transaction) => {
+      const current = await transaction.get(registryRef);
+      if (!current.exists) throw new ApiError(404, "Student record was not found.");
+      if (String(current.data()?.claimedUid ?? "") !== claimedUid) {
+        throw new ApiError(409, "This student record changed. Refresh and try again.");
+      }
+      await claimStudentIdentities(transaction, {
+        email: email.trim().toLowerCase(),
+        studentNumber: String(current.data()?.studentNumber ?? ""),
+      }, id, claimedUid, true);
+    });
 
     if (claimedUid) {
       try {

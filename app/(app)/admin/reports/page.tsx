@@ -12,6 +12,7 @@ import { db } from "@/lib/firebase/client";
 import { FormField, inputCls, PageHeader } from "@/components/data-table";
 import { SchoolwideAnalytics } from "@/components/reports/schoolwide-analytics";
 import { GeneratedPerformanceAnalysis } from "@/components/reports/generated-performance-analysis";
+import { FinalizedRatingsTable } from "@/components/reports/finalized-ratings-table";
 import {
   exportRowsToExcel,
   exportRowsToPDF,
@@ -36,6 +37,7 @@ import type {
 } from "@/lib/types";
 import { fmtDateTime } from "@/lib/utils-extras";
 import { reportableEvaluations } from "@/lib/evaluation-results";
+import { groupReportRatings } from "@/lib/report-ratings";
 import { buildReportParticipation, participationStatus } from "@/lib/report-participation";
 import toast from "react-hot-toast";
 
@@ -246,6 +248,10 @@ export default function AdminReportsPage() {
     () => evaluations.filter((evaluation) => matchesResponseFilters(evaluation)),
     [evaluations, matchesResponseFilters]
   );
+  const finalizedRatings = React.useMemo(
+    () => groupReportRatings(filteredEvaluations, programs),
+    [filteredEvaluations, programs]
+  );
   // Search narrows saved analyses, not the response-weighted teacher average.
   const analysisEvaluations = React.useMemo(
     () => evaluations.filter((evaluation) => matchesResponseFilters(evaluation, true)),
@@ -353,12 +359,12 @@ export default function AdminReportsPage() {
         const meta = reportMeta(filters, teachers, departments, periods);
         const lookups = {
           teachers: Object.fromEntries(teachers.map((item) => [item.id, item.displayName])),
-          departments: Object.fromEntries(departments.map((item) => [item.id, item.name])),
+          departments: Object.fromEntries(departments.map((item) => [item.id, item.code || item.name])),
           subjects: Object.fromEntries(subjects.map((item) => [item.id, item.name])),
           periods: Object.fromEntries(periods.map((item) => [item.id, item.name])),
           programs: Object.fromEntries(programs.map((item) => [item.id, item.code])),
         };
-        const options = { participation: reportParticipation, partial: partialReport };
+        const options = { participation: reportParticipation, partial: partialReport, finalizedRatings };
         if (kind === "pdf") exportToPDF(filteredSubmitted, meta, lookups, options);
         else exportToExcel(filteredSubmitted, meta, lookups, options);
       } else {
@@ -572,12 +578,13 @@ export default function AdminReportsPage() {
             </p>
           )}
           <h2 className="mb-3 text-sm font-semibold">Finalized ratings</h2>
-          <ResponsePreview
-            rows={filteredEvaluations}
+          <FinalizedRatingsTable
+            key={JSON.stringify([filters, search])}
+            ratings={finalizedRatings}
             teachers={teachers}
             subjects={subjects}
-            programs={programs}
             periods={periods}
+            departments={departments}
             loading={initialLoading}
           />
         </>
@@ -633,45 +640,6 @@ function buildProgressRows(
     });
   });
   return [...rows.values()];
-}
-
-function ResponsePreview({
-  rows,
-  teachers,
-  subjects,
-  programs,
-  periods,
-  loading,
-}: {
-  rows: Evaluation[];
-  teachers: Teacher[];
-  subjects: Subject[];
-  programs: Program[];
-  periods: EvaluationPeriod[];
-  loading: boolean;
-}) {
-  return (
-    <div className="overflow-x-auto rounded-lg border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900">
-      <table className="w-full min-w-[760px] text-sm">
-        <thead className="bg-slate-50 text-left text-xs uppercase text-slate-500 dark:bg-slate-800/60">
-          <tr><th className="px-4 py-3">Teacher</th><th className="px-4 py-3">Subject</th><th className="px-4 py-3">Program / Year</th><th className="px-4 py-3">Period</th><th className="px-4 py-3">Score</th></tr>
-        </thead>
-        <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-          {loading ? <tr><td colSpan={5} className="px-4 py-10 text-center text-slate-500">Loading reports...</td></tr>
-            : rows.length === 0 ? <tr><td colSpan={5} className="px-4 py-10 text-center text-slate-500">No finalized responses match these filters.</td></tr>
-              : rows.slice(0, 100).map((row) => (
-                <tr key={row.id}>
-                  <td className="px-4 py-3 font-medium">{teachers.find((item) => item.id === row.teacherId)?.displayName ?? "Teacher"}</td>
-                  <td className="px-4 py-3">{subjects.find((item) => item.id === row.subjectId)?.name ?? "Subject"}</td>
-                  <td className="px-4 py-3">{programs.find((item) => item.id === row.programId)?.code ?? row.course ?? "—"} / {row.yearLevel || "—"}</td>
-                  <td className="px-4 py-3">{periods.find((item) => item.id === row.periodId)?.name ?? "Period"}</td>
-                  <td className="px-4 py-3 font-semibold">{row.averageScore.toFixed(2)}</td>
-                </tr>
-              ))}
-        </tbody>
-      </table>
-    </div>
-  );
 }
 
 function AnonymousCommentsPreview({
