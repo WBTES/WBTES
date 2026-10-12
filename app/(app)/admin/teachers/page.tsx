@@ -14,6 +14,7 @@ import {
   updateDoc,
   where,
 } from "firebase/firestore";
+
 import {
   DataTable,
   FormField,
@@ -34,49 +35,103 @@ import toast from "react-hot-toast";
 
 const YEAR_LEVELS = ["1st", "2nd", "3rd", "4th"];
 
+type TeacherForm = {
+  displayName: string;
+  email: string;
+  employeeId: string;
+  departmentId: string;
+  subjectIds: string[];
+  programIds: string[];
+  yearLevels: string[];
+  sections: string;
+  status: "active" | "inactive";
+  expectedStudents: string;
+};
+
+const createEmptyForm = (): TeacherForm => ({
+  displayName: "",
+  email: "",
+  employeeId: "",
+  departmentId: "",
+  subjectIds: [],
+  programIds: [],
+  yearLevels: [],
+  sections: "",
+  status: "active",
+  expectedStudents: "0",
+});
+
 export default function AdminTeachersPage() {
   const { programs } = usePrograms();
+
   const [teachers, setTeachers] = React.useState<Teacher[]>([]);
   const [departments, setDepartments] = React.useState<Department[]>([]);
   const [subjects, setSubjects] = React.useState<Subject[]>([]);
   const [open, setOpen] = React.useState(false);
   const [editing, setEditing] = React.useState<Teacher | null>(null);
   const [loading, setLoading] = React.useState(false);
-  const [form, setForm] = React.useState({
-    displayName: "",
-    email: "",
-    employeeId: "",
-    departmentId: "",
-    subjectIds: [] as string[],
-    programIds: [] as string[],
-    yearLevels: [] as string[],
-    sections: "",
-    status: "active" as "active" | "inactive",
-  });
+  const [form, setForm] = React.useState<TeacherForm>(createEmptyForm);
 
   React.useEffect(() => {
     if (!firebaseReady) return;
+
     const teacherUnsubscribe = onSnapshot(
       query(collection(db, "teachers"), orderBy("displayName")),
-      (snapshot) => setTeachers(snapshot.docs.map((item) => ({
-        id: item.id,
-        ...(item.data() as Omit<Teacher, "id">),
-      })))
+      (snapshot) => {
+        setTeachers(
+          snapshot.docs.map(
+            (item) =>
+              ({
+                id: item.id,
+                ...item.data(),
+              }) as Teacher
+          )
+        );
+      },
+      (error) => {
+        console.error("Error loading teachers:", error);
+        toast.error("Could not load teachers.");
+      }
     );
+
     const departmentUnsubscribe = onSnapshot(
       query(collection(db, "departments"), orderBy("name")),
-      (snapshot) => setDepartments(snapshot.docs.map((item) => ({
-        id: item.id,
-        ...(item.data() as Omit<Department, "id">),
-      })))
+      (snapshot) => {
+        setDepartments(
+          snapshot.docs.map(
+            (item) =>
+              ({
+                id: item.id,
+                ...item.data(),
+              }) as Department
+          )
+        );
+      },
+      (error) => {
+        console.error("Error loading departments:", error);
+        toast.error("Could not load departments.");
+      }
     );
+
     const subjectUnsubscribe = onSnapshot(
       query(collection(db, "subjects"), orderBy("name")),
-      (snapshot) => setSubjects(snapshot.docs.map((item) => ({
-        id: item.id,
-        ...(item.data() as Omit<Subject, "id">),
-      })))
+      (snapshot) => {
+        setSubjects(
+          snapshot.docs.map(
+            (item) =>
+              ({
+                id: item.id,
+                ...item.data(),
+              }) as Subject
+          )
+        );
+      },
+      (error) => {
+        console.error("Error loading subjects:", error);
+        toast.error("Could not load subjects.");
+      }
     );
+
     return () => {
       teacherUnsubscribe();
       departmentUnsubscribe();
@@ -87,49 +142,93 @@ export default function AdminTeachersPage() {
   const resetScope = (departmentId: string) => ({
     departmentId,
     subjectIds: [] as string[],
-    programIds: programs.filter((program) => program.departmentId === departmentId && program.status === "active").map((program) => program.id),
+    programIds: programs
+      .filter(
+        (program) =>
+          program.departmentId === departmentId &&
+          program.status === "active"
+      )
+      .map((program) => program.id),
   });
 
   const openNew = () => {
     const departmentId = departments[0]?.id ?? "";
+
     setEditing(null);
     setForm({
-      displayName: "",
-      email: "",
-      employeeId: "",
+      ...createEmptyForm(),
       ...resetScope(departmentId),
-      yearLevels: YEAR_LEVELS.slice(0, 4),
-      sections: "",
-      status: "active",
+      yearLevels: YEAR_LEVELS.slice(),
     });
     setOpen(true);
   };
 
   const openEdit = (teacher: Teacher) => {
     setEditing(teacher);
+
     setForm({
-      displayName: teacher.displayName,
+      displayName: teacher.displayName ?? "",
       email: teacher.email ?? "",
       employeeId: teacher.employeeId ?? "",
-      departmentId: teacher.departmentId,
+      departmentId: teacher.departmentId ?? "",
       subjectIds: teacher.subjectIds ?? [],
-      programIds: teacher.programIds ?? programs
-        .filter((program) => program.departmentId === teacher.departmentId)
-        .map((program) => program.id),
-      yearLevels: teacher.yearLevels ?? YEAR_LEVELS.slice(0, 4),
+      programIds:
+        teacher.programIds ??
+        programs
+          .filter(
+            (program) => program.departmentId === teacher.departmentId
+          )
+          .map((program) => program.id),
+      yearLevels: teacher.yearLevels ?? YEAR_LEVELS.slice(),
       sections: (teacher.sections ?? []).join(", "),
-      status: teacher.status ?? "active",
+      status: teacher.status === "inactive" ? "inactive" : "active",
+      expectedStudents: String(
+        (teacher as Teacher & { expectedStudents?: number })
+          .expectedStudents ?? 0
+      ),
     });
+
     setOpen(true);
   };
 
-  const save = async (event: React.FormEvent) => {
+  const save = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (form.subjectIds.length === 0 || form.programIds.length === 0) {
-      toast.error("Assign at least one subject and one Program.");
+
+    if (!firebaseReady) {
+      toast.error("Firebase is not configured.");
       return;
     }
+
+    if (!form.departmentId) {
+      toast.error("Please select a department.");
+      return;
+    }
+
+    if (form.subjectIds.length === 0 || form.programIds.length === 0) {
+      toast.error("Assign at least one subject and one program.");
+      return;
+    }
+
+    const expectedStudents = Number(form.expectedStudents);
+
+    if (
+      form.expectedStudents.trim() === "" ||
+      !Number.isSafeInteger(expectedStudents) ||
+      expectedStudents < 0
+    ) {
+      toast.error(
+        "Expected Number of Students must be a whole number of 0 or greater."
+      );
+      return;
+    }
+
+    if (!form.displayName.trim()) {
+      toast.error("Please enter the teacher's full name.");
+      return;
+    }
+
     setLoading(true);
+
     try {
       const payload = {
         displayName: form.displayName.trim(),
@@ -139,24 +238,38 @@ export default function AdminTeachersPage() {
         subjectIds: form.subjectIds,
         programIds: form.programIds,
         yearLevels: form.yearLevels,
-        sections: form.sections.split(",").map((section) => section.trim()).filter(Boolean),
+        sections: form.sections
+          .split(",")
+          .map((section) => section.trim())
+          .filter(Boolean),
         status: form.status,
+        expectedStudents,
         updatedAt: Date.now(),
       };
+
       let teacherId = editing?.id ?? "";
+
       if (editing) {
         await updateDoc(doc(db, "teachers", editing.id), payload);
-        const response = await authenticatedFetch("/api/admin/teachers/sync", {
-          method: "POST",
-          body: JSON.stringify({ teacherId: editing.id }),
-        });
+
+        const response = await authenticatedFetch(
+          "/api/admin/teachers/sync",
+          {
+            method: "POST",
+            body: JSON.stringify({ teacherId: editing.id }),
+          }
+        );
+
         const result = await readApiResponse<{
           assignmentsUpdated: number;
           studentLinks: number;
         }>(response);
+
         toast.success(
           result.assignmentsUpdated > 0
-            ? `Teacher updated and ${result.assignmentsUpdated} assignment${result.assignmentsUpdated === 1 ? "" : "s"} synchronized`
+            ? `Teacher updated and ${result.assignmentsUpdated} assignment${
+                result.assignmentsUpdated === 1 ? "" : "s"
+              } synchronized`
             : "Teacher updated"
         );
       } else {
@@ -165,147 +278,397 @@ export default function AdminTeachersPage() {
           createdAt: Date.now(),
           photoURL: null,
         });
+
         teacherId = created.id;
         toast.success("Teacher created");
       }
-      void recordActivity(editing ? "teacher_updated" : "teacher_created", {
-        teacherId,
-        departmentId: form.departmentId,
-      });
+
+      void recordActivity(
+        editing ? "teacher_updated" : "teacher_created",
+        {
+          teacherId,
+          departmentId: form.departmentId,
+          expectedStudents,
+        }
+      );
+
       setOpen(false);
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Teacher could not be saved.");
+      console.error("Error saving teacher:", error);
+
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : "Teacher could not be saved."
+      );
     } finally {
       setLoading(false);
     }
   };
 
   const remove = async (teacher: Teacher) => {
+    if (!firebaseReady) {
+      toast.error("Firebase is not configured.");
+      return;
+    }
+
     if (!confirm(`Delete ${teacher.displayName}?`)) return;
+
     try {
       const [assignments, evaluations, reports] = await Promise.all([
-        getDocs(query(collection(db, "teacherAssignments"), where("teacherId", "==", teacher.id))),
-        getDocs(query(collection(db, "evaluations"), where("teacherId", "==", teacher.id))),
-        getDocs(query(collection(db, "performanceReports"), where("teacherId", "==", teacher.id))),
+        getDocs(
+          query(
+            collection(db, "teacherAssignments"),
+            where("teacherId", "==", teacher.id)
+          )
+        ),
+        getDocs(
+          query(
+            collection(db, "evaluations"),
+            where("teacherId", "==", teacher.id)
+          )
+        ),
+        getDocs(
+          query(
+            collection(db, "performanceReports"),
+            where("teacherId", "==", teacher.id)
+          )
+        ),
       ]);
-      if (!assignments.empty || !evaluations.empty || !reports.empty) {
-        throw new Error("This teacher has evaluation history. Set the record inactive to preserve reports.");
+
+      if (
+        !assignments.empty ||
+        !evaluations.empty ||
+        !reports.empty
+      ) {
+        throw new Error(
+          "This teacher has evaluation history. Set the record inactive to preserve reports."
+        );
       }
+
       await deleteDoc(doc(db, "teachers", teacher.id));
-      void recordActivity("teacher_deleted", { teacherId: teacher.id });
+
+      void recordActivity("teacher_deleted", {
+        teacherId: teacher.id,
+      });
+
       toast.success("Teacher deleted");
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Teacher deletion failed.");
+      console.error("Error deleting teacher:", error);
+
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : "Teacher deletion failed."
+      );
     }
   };
 
-  const departmentSubjects = subjects.filter((subject) => subject.departmentId === form.departmentId);
-  const departmentPrograms = programs.filter((program) => program.departmentId === form.departmentId);
+  const departmentSubjects = subjects.filter(
+    (subject) => subject.departmentId === form.departmentId
+  );
+
+  const departmentPrograms = programs.filter(
+    (program) => program.departmentId === form.departmentId
+  );
 
   return (
     <div>
       <PageHeader
         title="Teachers"
-        description="Assign each teacher to a department, subjects, Programs, year levels, and sections."
-        action={<button onClick={openNew} className="btn-primary"><Plus className="h-4 w-4" /> Add teacher</button>}
+        description="Assign each teacher to a department, subjects, programs, year levels, sections, and expected student count."
+        action={
+          <button onClick={openNew} className="btn-primary">
+            <Plus className="h-4 w-4" />
+            Add teacher
+          </button>
+        }
       />
 
       <DataTable
         rows={teachers}
-        searchKeys={["displayName", "email", "employeeId", "status"]}
+        searchKeys={[
+          "displayName",
+          "email",
+          "employeeId",
+          "status",
+        ]}
         columns={[
-          { key: "displayName", label: "Name" },
-          { key: "employeeId", label: "Employee ID", render: (row) => (row as Teacher).employeeId || "—" },
+          {
+            key: "displayName",
+            label: "Name",
+          },
+          {
+            key: "employeeId",
+            label: "Employee ID",
+            render: (row) => (row as Teacher).employeeId || "—",
+          },
           {
             key: "departmentId",
             label: "Department",
-            render: (row) => departments.find((item) => item.id === (row as Teacher).departmentId)?.name ?? "—",
+            render: (row) =>
+              departments.find(
+                (item) => item.id === (row as Teacher).departmentId
+              )?.name ?? "—",
           },
           {
             key: "subjectIds",
             label: "Subjects",
             render: (row) => {
               const names = ((row as Teacher).subjectIds ?? [])
-                .map((id) => subjects.find((subject) => subject.id === id))
-                .filter((subject): subject is Subject => Boolean(subject))
+                .map((id) =>
+                  subjects.find((subject) => subject.id === id)
+                )
+                .filter(
+                  (subject): subject is Subject => Boolean(subject)
+                )
                 .map(formatSubjectLabel)
                 .filter(Boolean);
+
               return names.length ? names.join(", ") : "No subjects";
             },
           },
           {
             key: "programIds",
             label: "Programs",
-            render: (row) => (row as Teacher).programIds
-              ?.map((id) => programs.find((program) => program.id === id)?.code)
-              .filter(Boolean)
-              .join(", ") || "—",
+            render: (row) =>
+              (row as Teacher).programIds
+                ?.map(
+                  (id) =>
+                    programs.find((program) => program.id === id)?.code
+                )
+                .filter(Boolean)
+                .join(", ") || "—",
           },
-          { key: "status", label: "Status", render: (row) => (row as Teacher).status ?? "active" },
+          {
+            key: "expectedStudents",
+            label: "Expected Number of Students",
+            render: (row) => {
+              const teacher = row as Teacher & {
+                expectedStudents?: number;
+              };
+
+              return (
+                teacher.expectedStudents ?? 0
+              ).toLocaleString();
+            },
+          },
+          {
+            key: "status",
+            label: "Status",
+            render: (row) =>
+              (row as Teacher).status ?? "active",
+          },
         ]}
         onEdit={openEdit}
         onDelete={remove}
         empty="No teachers yet"
       />
 
-      <Modal open={open} onClose={() => setOpen(false)} title={editing ? "Edit teacher" : "Add teacher"} size="lg">
+      <Modal
+        open={open}
+        onClose={() => {
+          if (!loading) setOpen(false);
+        }}
+        title={editing ? "Edit teacher" : "Add teacher"}
+        size="lg"
+      >
         <form onSubmit={save} className="space-y-4">
           <div className="grid gap-4 sm:grid-cols-2">
             <FormField label="Full name">
-              <input required value={form.displayName} onChange={(event) => setForm({ ...form, displayName: event.target.value })} className={inputCls} />
+              <input
+                required
+                value={form.displayName}
+                onChange={(event) =>
+                  setForm({
+                    ...form,
+                    displayName: event.target.value,
+                  })
+                }
+                className={inputCls}
+              />
             </FormField>
+
             <FormField label="Employee ID">
-              <input value={form.employeeId} onChange={(event) => setForm({ ...form, employeeId: event.target.value })} className={inputCls} />
+              <input
+                value={form.employeeId}
+                onChange={(event) =>
+                  setForm({
+                    ...form,
+                    employeeId: event.target.value,
+                  })
+                }
+                className={inputCls}
+              />
             </FormField>
           </div>
-          <FormField label="Email" hint="Record and notification address only; teachers do not receive login accounts.">
-            <input type="email" value={form.email} onChange={(event) => setForm({ ...form, email: event.target.value })} className={inputCls} />
+
+          <FormField
+            label="Email"
+            hint="Record and notification address only; teachers do not receive login accounts."
+          >
+            <input
+              type="email"
+              value={form.email}
+              onChange={(event) =>
+                setForm({
+                  ...form,
+                  email: event.target.value,
+                })
+              }
+              className={inputCls}
+            />
           </FormField>
+
+          <FormField
+            label="Expected Number of Students"
+            hint="Enter the expected number of students assigned to this teacher."
+          >
+            <input
+              type="number"
+              min="0"
+              step="1"
+              required
+              inputMode="numeric"
+              value={form.expectedStudents}
+              onChange={(event) =>
+                setForm({
+                  ...form,
+                  expectedStudents: event.target.value,
+                })
+              }
+              placeholder="Enter expected number of students"
+              className={inputCls}
+            />
+          </FormField>
+
           <div className="grid gap-4 sm:grid-cols-2">
             <FormField label="Department">
               <select
                 required
                 value={form.departmentId}
-                onChange={(event) => setForm({ ...form, ...resetScope(event.target.value) })}
+                onChange={(event) =>
+                  setForm({
+                    ...form,
+                    ...resetScope(event.target.value),
+                  })
+                }
                 className={inputCls}
               >
                 <option value="">Select department</option>
                 {departments.map((department) => (
-                  <option key={department.id} value={department.id}>{department.code} - {department.name}</option>
+                  <option
+                    key={department.id}
+                    value={department.id}
+                  >
+                    {department.code} - {department.name}
+                  </option>
                 ))}
               </select>
             </FormField>
+
             <FormField label="Status">
-              <select value={form.status} onChange={(event) => setForm({ ...form, status: event.target.value as Teacher["status"] & ("active" | "inactive") })} className={inputCls}>
+              <select
+                value={form.status}
+                onChange={(event) =>
+                  setForm({
+                    ...form,
+                    status: event.target.value as
+                      | "active"
+                      | "inactive",
+                  })
+                }
+                className={inputCls}
+              >
                 <option value="active">Active</option>
                 <option value="inactive">Inactive</option>
               </select>
             </FormField>
           </div>
+
           <CheckList
             label="Assigned subjects"
             values={form.subjectIds}
-            options={departmentSubjects.map((subject) => ({ id: subject.id, label: formatSubjectLabel(subject) }))}
-            onChange={(subjectIds) => setForm({ ...form, subjectIds })}
+            options={departmentSubjects.map((subject) => ({
+              id: subject.id,
+              label: formatSubjectLabel(subject),
+            }))}
+            onChange={(subjectIds) =>
+              setForm({
+                ...form,
+                subjectIds,
+              })
+            }
           />
+
           <CheckList
             label="Assigned Programs"
             values={form.programIds}
-            options={departmentPrograms.map((program) => ({ id: program.id, label: `${program.code} - ${program.name}` }))}
-            onChange={(programIds) => setForm({ ...form, programIds })}
+            options={departmentPrograms.map((program) => ({
+              id: program.id,
+              label: `${program.code} - ${program.name}`,
+            }))}
+            onChange={(programIds) =>
+              setForm({
+                ...form,
+                programIds,
+              })
+            }
           />
+
           <CheckList
             label="Assigned year levels"
             values={form.yearLevels}
-            options={YEAR_LEVELS.map((year) => ({ id: year, label: `${year} year` }))}
-            onChange={(yearLevels) => setForm({ ...form, yearLevels })}
+            options={YEAR_LEVELS.slice().map((year) => ({
+              id: year,
+              label: `${year} year`,
+            }))}
+            onChange={(yearLevels) =>
+              setForm({
+                ...form,
+                yearLevels,
+              })
+            }
           />
-          <FormField label="Assigned sections" hint="Comma-separated. Leave blank to allow every section in the selected Programs.">
-            <input value={form.sections} onChange={(event) => setForm({ ...form, sections: event.target.value })} placeholder="A, B, C" className={inputCls} />
+
+          <FormField
+            label="Assigned sections"
+            hint="Comma-separated. Leave blank to allow every section in the selected programs."
+          >
+            <input
+              value={form.sections}
+              onChange={(event) =>
+                setForm({
+                  ...form,
+                  sections: event.target.value,
+                })
+              }
+              placeholder="A, B, C"
+              className={inputCls}
+            />
           </FormField>
+
           <div className="flex justify-end gap-2 pt-2">
-            <button type="button" onClick={() => setOpen(false)} className="btn-secondary">Cancel</button>
-            <button type="submit" disabled={loading} className="btn-primary">{loading ? "Saving..." : "Save teacher"}</button>
+            <button
+              type="button"
+              onClick={() => setOpen(false)}
+              disabled={loading}
+              className="btn-secondary"
+            >
+              Cancel
+            </button>
+
+            <button
+              type="submit"
+              disabled={loading}
+              className="btn-primary"
+            >
+              {loading
+                ? "Saving..."
+                : editing
+                  ? "Save changes"
+                  : "Save teacher"}
+            </button>
           </div>
         </form>
       </Modal>
@@ -327,17 +690,22 @@ function CheckList({
   return (
     <fieldset>
       <legend className="sr-only">{label}</legend>
+
       <div className="flex items-center justify-between gap-3">
         <p className="text-sm font-medium">{label}</p>
+
         <div className="flex items-center gap-1">
           <button
             type="button"
-            onClick={() => onChange(options.map((option) => option.id))}
+            onClick={() =>
+              onChange(options.map((option) => option.id))
+            }
             disabled={options.length === 0}
             className="rounded-md px-2 py-1 text-xs font-semibold text-brand-700 hover:bg-brand-50 disabled:opacity-50 dark:text-brand-300 dark:hover:bg-brand-500/10"
           >
             Select all
           </button>
+
           <button
             type="button"
             onClick={() => onChange([])}
@@ -348,25 +716,44 @@ function CheckList({
           </button>
         </div>
       </div>
+
       <div className="mt-2 grid max-h-44 gap-2 overflow-auto rounded-lg border border-slate-200 p-3 dark:border-slate-800 sm:grid-cols-2">
         {options.length === 0 ? (
-          <p className="text-sm text-slate-500">No matching records are available.</p>
-        ) : options.map((option) => (
-          <label key={option.id} className="flex items-start gap-2 text-sm">
-            <input
-              type="checkbox"
-              checked={values.includes(option.id)}
-              onChange={(event) => onChange(
-                event.target.checked
-                  ? [...values, option.id]
-                  : values.filter((value) => value !== option.id)
-              )}
-              className="mt-0.5 h-4 w-4 rounded border-slate-300 text-brand-600"
-            />
-            <span>{option.label}</span>
-          </label>
-        ))}
+          <p className="text-sm text-slate-500">
+            No matching records are available.
+          </p>
+        ) : (
+          options.map((option) => (
+            <label
+              key={option.id}
+              className="flex items-start gap-2 text-sm"
+            >
+              <input
+                type="checkbox"
+                checked={values.includes(option.id)}
+                onChange={(event) =>
+                  onChange(
+                    event.target.checked
+                      ? [...values, option.id]
+                      : values.filter(
+                          (value) => value !== option.id
+                        )
+                  )
+                }
+                className="mt-0.5 h-4 w-4 rounded border-slate-300 text-brand-600"
+              />
+
+              <span>{option.label}</span>
+            </label>
+          ))
+        )}
       </div>
     </fieldset>
   );
 }
+
+
+
+
+
+
