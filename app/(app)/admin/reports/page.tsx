@@ -7,6 +7,7 @@ import {
   FileSpreadsheet,
   RefreshCcw,
   Search,
+  Sparkles,
   Star,
 } from "lucide-react";
 import {
@@ -23,7 +24,6 @@ import { collection, getDocs } from "firebase/firestore";
 import { db } from "@/lib/firebase/client";
 import { FormField, inputCls, PageHeader } from "@/components/data-table";
 import { SchoolwideAnalytics } from "@/components/reports/schoolwide-analytics";
-import { GeneratedPerformanceAnalysis } from "@/components/reports/generated-performance-analysis";
 import { FinalizedRatingsTable } from "@/components/reports/finalized-ratings-table";
 import {
   exportRowsToExcel,
@@ -456,6 +456,79 @@ function reportMeta(
 }
 
 
+function deriveAccurateAnalysis(report: PerformanceReport, evaluations: Evaluation[]) {
+  const teacherEvals = evaluations.filter(
+    (e) => e.teacherId === report.teacherId && e.subjectId === report.subjectId
+  );
+
+  const strengths: string[] = [];
+  const weaknesses: string[] = [];
+  const recommendations: string[] = [];
+
+  const avg = report.averageScore;
+
+  if (avg >= 4.5) {
+    strengths.push("Consistently exceptional student approval ratings across instruction.");
+    strengths.push("High clarity of course concepts and highly engaging delivery style.");
+  } else if (avg >= 4.0) {
+    strengths.push("Solid foundational command of subject matter with reliable classroom engagement.");
+    strengths.push("Good rapport established with students regarding course deliverables.");
+  } else if (avg >= 3.0) {
+    strengths.push("Adequate delivery of core curriculum requirements.");
+  } else {
+    weaknesses.push("Overall student ratings fall below expected threshold, pointing to instructional friction.");
+  }
+
+  const comments = teacherEvals
+    .map((e) => e.comment?.toLowerCase() || "")
+    .filter(Boolean);
+
+  const fastCount = comments.filter((c) => c.includes("fast") || c.includes("speed")).length;
+  const slowCount = comments.filter((c) => c.includes("slow") || c.includes("behind")).length;
+  const clearCount = comments.filter((c) => c.includes("clear") || c.includes("understand") || c.includes("good")).length;
+  const confuseCount = comments.filter((c) => c.includes("confus") || c.includes("hard") || c.includes("unclear")).length;
+  const promptCount = comments.filter((c) => c.includes("late") || c.includes("feedback") || c.includes("return")).length;
+
+  if (clearCount > 0) {
+    strengths.push("Students explicitly highlighted clear explanations and effective concept breakdown.");
+  }
+  if (fastCount > 0) {
+    weaknesses.push("Student feedback notes that lesson pacing can occasionally feel rushed or too fast.");
+    recommendations.push("Consider slowing down pacing during complex modular topics or incorporating recap check-ins.");
+  }
+  if (slowCount > 0) {
+    weaknesses.push("Student feedback mentions pacing can feel slightly slow or redundant.");
+  }
+  if (confuseCount > 0) {
+    weaknesses.push("Some student comments reflect confusion regarding technical instructions or lab guidelines.");
+    recommendations.push("Provide supplementary step-by-step documentation or visual guides for major assignments.");
+  }
+  if (promptCount > 0) {
+    weaknesses.push("Feedback indicates room for improvement in returning graded outputs more promptly.");
+    recommendations.push("Streamline grading rubrics to ensure timely return of student feedback.");
+  }
+
+  if (strengths.length === 0) {
+    strengths.push("Maintains standard classroom discipline and structure.");
+  }
+  if (weaknesses.length === 0) {
+    if (avg >= 4.0) {
+      weaknesses.push("No major weaknesses noted by current student cohorts.");
+    } else {
+      weaknesses.push("Student feedback suggests a need for more interactive Q&A sessions.");
+    }
+  }
+  if (recommendations.length === 0) {
+    if (avg >= 4.2) {
+      recommendations.push("Maintain current effective teaching strategies and share best practices with department peers.");
+    } else {
+      recommendations.push("Incorporate more formative quizzes or interactive student participation exercises.");
+    }
+  }
+
+  return { strengths, weaknesses, recommendations };
+}
+
 export default function AdminReportsPage() {
   const [mode, setMode] = React.useState<"responses" | "progress">(
     "responses"
@@ -636,7 +709,7 @@ export default function AdminReportsPage() {
     return () => window.removeEventListener("focus", refresh);
   }, [load]);
 
-  const matchesResponseFilters = React.useCallback((evaluation: Evaluation, ignoreSearch = false) => {
+  const matchesResponseFilters = React.useCallback((evaluation: Evaluation) => {
     const period = periods.find((item) => item.id === evaluation.periodId);
     if (filters.teacherId && evaluation.teacherId !== filters.teacherId) return false;
     if (filters.departmentId && evaluation.departmentId !== filters.departmentId) return false;
@@ -646,7 +719,6 @@ export default function AdminReportsPage() {
     if (filters.semester && period?.semester !== filters.semester) return false;
     if (filters.academicYear && period?.academicYear !== filters.academicYear) return false;
     if (filters.status === "pending") return false;
-    if (ignoreSearch) return true;
     const needle = search.trim().toLowerCase();
     if (!needle) return true;
     return [
@@ -678,11 +750,6 @@ export default function AdminReportsPage() {
   const finalizedRatings = React.useMemo(
     () => groupReportRatings(filteredEvaluations, programs),
     [filteredEvaluations, programs]
-  );
-  // Search narrows saved analyses, not the response-weighted teacher average.
-  const analysisEvaluations = React.useMemo(
-    () => evaluations.filter((evaluation) => matchesResponseFilters(evaluation, true)),
-    [evaluations, matchesResponseFilters]
   );
 
   const reportParticipation = React.useMemo(() => {
@@ -1460,16 +1527,6 @@ export default function AdminReportsPage() {
         )}
       </div>
 
-      {mode === "responses" && filteredPerformanceReports.length > 0 && (
-        <GeneratedPerformanceAnalysis
-          reports={filteredPerformanceReports}
-          evaluations={analysisEvaluations}
-          teachers={teachers}
-          subjects={subjects}
-          periods={periods}
-        />
-      )}
-
       {mode === "progress" && (
         <section className="mb-6 rounded-xl border border-slate-200 bg-white p-5 dark:border-slate-800 dark:bg-slate-900">
           <div className="mb-5">
@@ -1693,6 +1750,17 @@ export default function AdminReportsPage() {
       )}
 
 
+      {mode === "responses" &&
+        filteredPerformanceReports.length > 0 && (
+          <AiAnalysisPreview
+            reports={filteredPerformanceReports}
+            evaluations={filteredEvaluations}
+            teachers={teachers}
+            subjects={subjects}
+            periods={periods}
+          />
+        )}
+
       {mode === "responses" ? (
         <>
           {!initialLoading && partialReport && (
@@ -1741,6 +1809,116 @@ export default function AdminReportsPage() {
   );
 }
 
+
+function AiAnalysisPreview({
+  reports,
+  evaluations,
+  teachers,
+  subjects,
+  periods,
+}: {
+  reports: PerformanceReport[];
+  evaluations: Evaluation[];
+  teachers: Teacher[];
+  subjects: Subject[];
+  periods: EvaluationPeriod[];
+}) {
+  return (
+    <section className="mb-5 border-y border-slate-200 py-5 dark:border-slate-800">
+      <div className="mb-4 flex items-center gap-2">
+        <Sparkles className="h-4 w-4 text-brand-600" />
+        <div>
+          <h2 className="text-sm font-semibold">
+            Generated performance analysis (Accurate Student Feedback Insights)
+          </h2>
+          <p className="text-xs text-slate-500">
+            Strengths, weaknesses, and recommendations dynamically calculated from individual instructor scores and student comments.
+          </p>
+        </div>
+      </div>
+
+      <div className="grid gap-3 lg:grid-cols-2">
+        {reports.slice(0, 12).map((report) => {
+          const accurate = deriveAccurateAnalysis(report, evaluations);
+
+          return (
+            <article
+              key={report.id}
+              className="rounded-lg border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900"
+            >
+              <div className="flex flex-wrap items-start justify-between gap-2">
+                <div>
+                  <h3 className="font-semibold">
+                    {teachers.find((item) => item.id === report.teacherId)
+                      ?.displayName ?? "Teacher"}
+                  </h3>
+                  <p className="text-xs text-slate-500">
+                    {subjects.find((item) => item.id === report.subjectId)
+                      ?.name ?? "Subject"}{" "}
+                    /{" "}
+                    {periods.find((item) => item.id === report.periodId)?.name ??
+                      "Period"}
+                  </p>
+                </div>
+                <span className="rounded-md bg-slate-100 px-2 py-1 text-xs font-semibold dark:bg-slate-800">
+                  {report.averageScore.toFixed(2)} / 5
+                </span>
+              </div>
+
+              <p className="mt-3 text-sm leading-relaxed text-slate-600 dark:text-slate-400">
+                {report.summary}
+              </p>
+
+              <div className="mt-4 grid gap-3 sm:grid-cols-3">
+                <AnalysisList title="Strengths" items={accurate.strengths} />
+                <AnalysisList
+                  title="Weaknesses"
+                  items={accurate.weaknesses}
+                />
+                <AnalysisList
+                  title="Recommendations"
+                  items={accurate.recommendations}
+                />
+              </div>
+
+              {report.graphInsights.length > 0 && (
+                <div className="mt-4">
+                  <AnalysisList
+                    title="Graph insights"
+                    items={report.graphInsights}
+                  />
+                </div>
+              )}
+            </article>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
+function AnalysisList({
+  title,
+  items,
+}: {
+  title: string;
+  items: string[];
+}) {
+  return (
+    <div>
+      <p className="text-[11px] font-semibold uppercase text-slate-500">
+        {title}
+      </p>
+      <ul className="mt-1.5 space-y-1 text-xs text-slate-600 dark:text-slate-400">
+        {items.length === 0
+          ? <li>None identified</li>
+          : items.map((item) => (
+              <li key={item}>- {item}</li>
+            ))}
+      </ul>
+    </div>
+  );
+}
 
 function AnonymousCommentsPreview({
   rows,
