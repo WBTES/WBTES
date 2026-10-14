@@ -4,13 +4,13 @@ import { adminAuth, adminDb } from "@/lib/firebase/admin";
 import {
   apiErrorResponse,
   asString,
-  emailDocumentId,
   optionalString,
 } from "@/lib/server/api-response";
 import { writeAuditLog } from "@/lib/server/audit";
 import { synchronizeStudentAssignments } from "@/lib/server/assignment-sync";
 import { ApiError, requireAdmin } from "@/lib/server/require-admin";
 import { claimStudentIdentities } from "@/lib/server/student-identities";
+import { studentRegistryId } from "@/lib/server/student-registry";
 import {
   type StudentRegistrationInput,
   validateStudentRegistration,
@@ -88,7 +88,7 @@ export async function PATCH(request: Request) {
 
     const registration = await validateStudentRegistration({
       ...body,
-      email: existingData.email,
+      email: body.email ?? existingData.email,
     }, { requireStudentNumber: Boolean(existingData.studentNumber) });
     const claimedUid = optionalString(existingData.claimedUid, 200);
     if (!claimedUid && status === "active") {
@@ -253,19 +253,22 @@ function normalizeStatus(value: unknown): StudentStatus {
 }
 
 async function migrateLegacyStudents() {
-  const students = await adminDb
-    .collection("users")
-    .where("role", "==", "student")
-    .get();
+  const [students, registrations] = await Promise.all([
+    adminDb.collection("users").where("role", "==", "student").get(),
+    adminDb.collection("studentRegistry").get(),
+  ]);
+  const byUid = new Map(registrations.docs.filter((item) => item.data().claimedUid)
+    .map((item) => [String(item.data().claimedUid), item]));
   const writer = adminDb.bulkWriter();
+  const writes: Array<Promise<FirebaseFirestore.WriteResult>> = [];
   for (const student of students.docs) {
     const data = student.data();
     if (!data.email || !data.programId || !data.departmentId) continue;
     const email = String(data.email).trim().toLowerCase();
-    const reference = adminDb
-      .collection("studentRegistry")
-      .doc(emailDocumentId(email));
-    writer.set(reference, {
+    const linked = byUid.get(student.id);
+    const id = linked?.id ?? studentRegistryId(student.id);
+    const reference = adminDb.collection("studentRegistry").doc(id);
+    if (!linked) writes.push(writer.set(reference, {
       email,
       emailNormalized: email,
       displayName: String(data.displayName ?? email),
@@ -280,7 +283,8 @@ async function migrateLegacyStudents() {
       claimedUid: student.id,
       createdAt: Number(data.createdAt ?? Date.now()),
       updatedAt: Date.now(),
-    }, { merge: true });
+    }, { merge: true }));
+    if (data.studentRegistryId !== id) writes.push(writer.update(student.ref, { studentRegistryId: id }));
   }
-  await writer.close();
+  await Promise.all([...writes, writer.close()]);
 }

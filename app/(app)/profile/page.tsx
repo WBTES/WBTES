@@ -10,6 +10,7 @@ import { auth, db, firebaseReady } from "@/lib/firebase/client";
 import { usePrograms } from "@/lib/use-programs";
 import { formatRoleLabel } from "@/lib/utils";
 import toast from "react-hot-toast";
+import { StudentPasswordForm } from "@/components/student-password-form";
 
 const MAX_AVATAR_BYTES = 5 * 1024 * 1024; // 5 MB raw upload limit (will be compressed)
 const AVATAR_MAX_DIM = 256; // final square size in px
@@ -345,6 +346,7 @@ export default function ProfilePage() {
           </button>
         </div>
       </form>
+      {profile.role === "student" && <StudentPasswordForm />}
     </div>
   );
 }

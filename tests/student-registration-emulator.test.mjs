@@ -53,6 +53,8 @@ function routes({ gateCreates = false } = {}) {
     "@/lib/server/school-email": { assertAllowedSchoolEmail() {} },
   };
   base["@/lib/server/student-identities"] = loadModule("lib/server/student-identities.ts", base);
+  base["@/lib/server/student-auth"] = loadModule("lib/server/student-auth.ts", base);
+  base["@/lib/server/student-registry"] = loadModule("lib/server/student-registry.ts", base);
   base["@/lib/server/student-registration"] = loadModule("lib/server/student-registration.ts", base);
   const registration = loadModule("app/api/auth/registration/route.ts", base);
   const admin = loadModule("app/api/admin/students/route.ts", base);
@@ -70,23 +72,24 @@ test("real Firestore transactions prevent two simultaneous accounts with one Sch
   assert.deepEqual(statuses.sort(), [201, 409], JSON.stringify(bodies));
   assert.equal((await db.collection("users").get()).size, 1);
   assert.equal((await db.collection("studentRegistry").get()).size, 1);
-  assert.equal((await db.collection("studentIdentities").get()).size, 2);
+  assert.equal((await db.collection("studentIdentities").get()).size, 1);
   assert.equal(f.accounts.size, 1);
   assert.equal(f.deleted.length, 1);
 });
 
-test("real concurrent same-email requests leave the winning student records untouched", async () => {
+test("real concurrent shared-email registrations create separate student records", async () => {
   const f = routes();
   const responses = await Promise.all([f.register({}, "one"), f.register({ studentNumber: "second-id" }, "two")]);
-  assert.deepEqual(responses.map((response) => response.status).sort(), [201, 409]);
+  assert.deepEqual(responses.map((response) => response.status).sort(), [201, 201]);
   const registry = (await db.collection("studentRegistry").get()).docs[0].data();
   assert.ok(f.accounts.has(registry.claimedUid));
-  assert.equal((await db.collection("users").get()).size, 1);
+  assert.equal((await db.collection("users").get()).size, 2);
+  assert.equal((await db.collection("studentRegistry").get()).size, 2);
 });
 
 test("admin School ID changes and student signup cannot claim the same new ID", async () => {
   const f = routes(); assert.equal((await f.register()).status, 201);
-  const id = encodeURIComponent(f.form.email);
+  const id = "student_uid1";
   const edit = new Request("http://local/api/admin/students", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...f.form, id, studentNumber: "new-id", status: "active" }) });
   const responses = await Promise.all([f.admin.PATCH(edit), f.register({ email: "second@gmail.com", studentNumber: "new-id" })]);
   const statuses = responses.map((response) => response.status);
@@ -103,26 +106,26 @@ test("a legacy student sign-in reserves its own identifiers without changing UID
   const response = await f.session.POST(new Request("http://local/api/auth/session", { method: "POST", headers: { "Content-Type": "application/json", "fixture-uid": "legacy", "fixture-email": f.form.email }, body: JSON.stringify({ method: "resume", mode: "claim" }) }));
   assert.equal(response.status, 200, JSON.stringify(await response.clone().json()));
   assert.equal((await response.json()).profile.uid, "legacy");
-  assert.equal((await db.collection("studentIdentities").get()).size, 2);
+  assert.equal((await db.collection("studentIdentities").get()).size, 1);
   assert.equal((await f.register({ email: "second@gmail.com" })).status, 409);
 });
 
 test("session recovery cannot transfer a registration already claimed by another UID", async () => {
   const f = routes(); await f.register();
   const response = await f.session.POST(new Request("http://local/api/auth/session", { method: "POST", headers: { "Content-Type": "application/json", "fixture-uid": "other", "fixture-email": f.form.email }, body: JSON.stringify({ method: "resume", mode: "claim" }) }));
-  assert.equal(response.status, 409);
-  assert.equal((await db.collection("studentRegistry").doc(encodeURIComponent(f.form.email)).get()).data().claimedUid, "uid1");
+  assert.equal(response.status, 403);
+  assert.equal((await db.collection("studentRegistry").doc("student_uid1").get()).data().claimedUid, "uid1");
   assert.ok(!(await db.collection("users").doc("other").get()).exists);
 });
 
 test("admin edits cannot clear an assigned School ID", async () => {
   const f = routes(); await f.register();
-  const response = await f.admin.PATCH(new Request("http://local/api/admin/students", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...f.form, id: encodeURIComponent(f.form.email), studentNumber: "", status: "active" }) }));
+  const response = await f.admin.PATCH(new Request("http://local/api/admin/students", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...f.form, id: "student_uid1", studentNumber: "", status: "active" }) }));
   assert.equal(response.status, 400);
   assert.equal((await db.collection("users").doc("uid1").get()).data().studentNumber, "001-A");
 });
 
-test("deleting a legacy student retains their once-only email and School ID reservations", async () => {
+test("deleting a legacy student retains their School ID but permits reusing the contact email", async () => {
   const f = routes();
   f.accounts.set("legacy", { uid: "legacy", email: f.form.email });
   const record = { ...f.form, emailNormalized: f.form.email, studentNumberNormalized: "001-a", departmentId: "cabait", claimedUid: "legacy", status: "active" };
@@ -135,7 +138,7 @@ test("deleting a legacy student retains their once-only email and School ID rese
   assert.equal(response.status, 200, JSON.stringify(await response.clone().json()));
   assert.ok(!(await db.collection("studentRegistry").doc(id).get()).exists);
   assert.ok(!(await db.collection("users").doc("legacy").get()).exists);
-  assert.equal((await db.collection("studentIdentities").get()).size, 2);
-  assert.equal((await f.register({ studentNumber: "other" })).status, 409);
+  assert.equal((await db.collection("studentIdentities").get()).size, 1);
   assert.equal((await f.register({ email: "second@gmail.com" })).status, 409);
+  assert.equal((await f.register({ studentNumber: "other" })).status, 201);
 });

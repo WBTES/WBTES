@@ -74,9 +74,12 @@ flowchart LR
 ```mermaid
 flowchart TD
     A[Account access workflow] --> B{Role}
-    B -- Student --> C[Self-register with academic details]
-    C --> D[Validate, create account, and synchronize assignments]
+    B -- Student --> C[Self-register with unique School ID<br/>Reusable contact email and academic details]
+    C --> D[Reserve School ID, create separate UID<br/>Synchronize assignments]
     D --> E[Automatic sign-in to Student dashboard]
+    E --> L[Later sign-in with School ID and password]
+    L --> M{Password forgotten?}
+    M -- Yes --> N[Administrator verifies student identity<br/>Resets only the selected account]
     B -- HR --> F[Administrator creates school-wide HR account]
     B -- Department Head --> G[Administrator creates school-wide Department Head account]
     F --> H{Email verified?}
@@ -87,6 +90,8 @@ flowchart TD
 ```
 
 **Authentication behavior:** student email verification is not required. HR and Department Head email verification is required. Disabled accounts are denied access, and route guards redirect each authenticated user to the dashboard for their role.
+
+**Student identity:** School IDs are unique, including after deletion. Different students may use the same contact email without sharing credentials, assignments, or evaluation records. Firebase UID remains the technical account key. Student email reservations from the previous policy are no longer used; no records are merged by email. Google sign-in is disabled for students, and staff email recovery remains unchanged.
 
 ```mermaid
 flowchart TD

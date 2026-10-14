@@ -40,6 +40,7 @@ export async function validateStudentRegistration(
   const studentNumber = options.requireStudentNumber
     ? asString(input.studentNumber, "School ID", 100)
     : optionalString(input.studentNumber, 100);
+  if (/[\x00-\x1f\x7f]/.test(studentNumber)) throw new ApiError(400, "Enter a valid School ID.");
   const programId = asString(input.programId, "Program", 200);
   const yearLevel = asString(input.yearLevel, "Year level", 50);
   const section = asString(input.section, "Section", 100);

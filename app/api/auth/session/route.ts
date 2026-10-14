@@ -3,7 +3,6 @@ import { adminAuth, adminDb } from "@/lib/firebase/admin";
 import { isSmtpConfigured, sendSmtpEmail } from "@/lib/email/smtp";
 import {
   apiErrorResponse,
-  emailDocumentId,
   normalizeEmail,
   optionalString,
 } from "@/lib/server/api-response";
@@ -14,6 +13,7 @@ import {
 import { assertAllowedSchoolEmail } from "@/lib/server/school-email";
 import { deliverVerificationEmail } from "@/lib/server/verification-email";
 import { claimStudentIdentities } from "@/lib/server/student-identities";
+import { findStudentRegistryReference } from "@/lib/server/student-registry";
 import type { AppUser } from "@/lib/types";
 
 export const runtime = "nodejs";
@@ -30,14 +30,13 @@ export async function POST(request: Request) {
     const body = await request.json() as SessionBody;
     const method = body.method ?? "resume";
     const mode = body.mode ?? "login";
-    const email = normalizeEmail(decoded.email);
+    if (method === "google" || decoded.firebase?.sign_in_provider === "google.com") throw new ApiError(403, "Students must sign in using their School ID and password. Contact an administrator for password recovery.");
+    let email = normalizeEmail(decoded.email);
     const userRef = adminDb.collection("users").doc(decoded.uid);
     let userSnapshot = await userRef.get();
 
     if (!userSnapshot.exists) {
-      const registryRef = adminDb
-        .collection("studentRegistry")
-        .doc(emailDocumentId(email));
+      const registryRef = await findStudentRegistryReference(decoded.uid, { email });
       await adminDb.runTransaction(async (transaction) => {
         const currentUser = await transaction.get(userRef);
         if (currentUser.exists) return;
@@ -45,7 +44,7 @@ export async function POST(request: Request) {
         if (!registrySnapshot.exists || registrySnapshot.data()?.status === "disabled") {
           throw new ApiError(
             403,
-            "This email has no WBTE student registration. Use Create account before signing in."
+            "This account has no WBTE student registration. Use Create account before signing in."
           );
         }
         const registry = registrySnapshot.data()!;
@@ -57,8 +56,9 @@ export async function POST(request: Request) {
           ? "pending"
           : "active";
         const profile: Omit<AppUser, "uid"> = {
-          email,
-          emailNormalized: email,
+          email: normalizeEmail(registry.email),
+          emailNormalized: normalizeEmail(registry.email),
+          studentRegistryId: registryRef.id,
           displayName: String(registry.displayName ?? decoded.name ?? email),
           role: "student",
           studentNumber: String(registry.studentNumber ?? ""),
@@ -85,6 +85,7 @@ export async function POST(request: Request) {
     }
 
     let profile = userSnapshot.data() as Omit<AppUser, "uid">;
+    if (profile.role === "student") email = normalizeEmail(profile.email);
     let profileStatus = profile.status ?? "active";
     if (profile.status === "disabled") {
       await adminAuth.revokeRefreshTokens(decoded.uid);
@@ -94,10 +95,12 @@ export async function POST(request: Request) {
       if (profile.role !== "student") {
         throw new ApiError(403, "This staff account is not active. Contact an administrator.");
       }
-      const registryRef = adminDb
-        .collection("studentRegistry")
-        .doc(emailDocumentId(email));
+      const registryRef = await findStudentRegistryReference(decoded.uid, profile);
       const registrySnapshot = await registryRef.get();
+      if (registrySnapshot.data()?.status === "disabled") throw new ApiError(403, "This student registration has been deactivated.");
+      if (registrySnapshot.data()?.claimedUid && registrySnapshot.data()?.claimedUid !== decoded.uid) {
+        throw new ApiError(409, "This student record belongs to another account.");
+      }
       const now = Date.now();
       const batch = adminDb.batch();
       batch.set(userRef, {
@@ -116,9 +119,6 @@ export async function POST(request: Request) {
         updatedAt: now,
       };
       profileStatus = "active";
-    }
-    if (method === "google" && profile.role !== "student") {
-      throw new ApiError(403, "Google school login is available to students only.");
     }
     if (
       mode !== "claim"
@@ -174,6 +174,7 @@ export async function POST(request: Request) {
       ...(profile.role === "student" ? {
         studentNumber: profile.studentNumber ?? "",
         studentNumberNormalized: profile.studentNumberNormalized ?? "",
+        studentRegistryId: profile.studentRegistryId,
       } : {}),
       lastLoginAt: mode === "login" ? now : profile.lastLoginAt ?? null,
       updatedAt: now,
@@ -215,9 +216,7 @@ async function ensureStudentRegistry(
   profile: Omit<AppUser, "uid">,
   email: string
 ) {
-  const registryRef = adminDb
-    .collection("studentRegistry")
-    .doc(emailDocumentId(email));
+  const registryRef = await findStudentRegistryReference(uid, profile);
   return adminDb.runTransaction(async (transaction) => {
     const registry = await transaction.get(registryRef);
     if (registry.exists && registry.data()?.status === "disabled") {
@@ -243,7 +242,7 @@ async function ensureStudentRegistry(
       yearLevel: profile.yearLevel ?? "", section: profile.section ?? "",
       status: "active", claimedUid: uid, createdAt: now, updatedAt: now,
     });
-    return { studentNumber, studentNumberNormalized };
+    return { studentNumber, studentNumberNormalized, studentRegistryId: registryRef.id };
   });
 }
 

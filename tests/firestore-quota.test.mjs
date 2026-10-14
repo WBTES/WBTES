@@ -75,6 +75,7 @@ test("admin login refuses to fabricate or bypass a profile when Firestore is exh
     "@/lib/server/require-admin": { ApiError, requireAuthenticatedUser: async () => ({ uid: "admin-id", email: "admin@example.com" }) },
     "@/lib/email/smtp": {}, "@/lib/server/school-email": {},
     "@/lib/server/verification-email": {}, "@/lib/server/student-identities": {},
+    "@/lib/server/student-registry": {},
   });
   const response = await route.POST(new Request("http://local/api/auth/session", {
     method: "POST", body: JSON.stringify({ method: "password", mode: "login" }),

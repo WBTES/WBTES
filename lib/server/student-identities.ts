@@ -4,7 +4,6 @@ import { createHash } from "node:crypto";
 import { adminDb } from "@/lib/firebase/admin";
 import { ApiError } from "@/lib/server/require-admin";
 
-export const EMAIL_ALREADY_REGISTERED = "This email is already registered. Sign in or use Forgot password.";
 export const SCHOOL_ID_ALREADY_REGISTERED = "This School ID is already registered. Contact an administrator if it belongs to you.";
 
 export function studentIdentityKey(type: "email" | "school_id", value: string) {
@@ -18,9 +17,8 @@ export async function claimStudentIdentities(
   uid: string,
   allowExistingOwner = false
 ) {
-  const identities = [{ type: "email" as const, value: registration.email, fields: ["emailNormalized", "email"], message: EMAIL_ALREADY_REGISTERED }];
   const schoolId = registration.studentNumber?.trim();
-  const keys: Array<{ type: "email" | "school_id"; value: string; fields: string[]; message: string }> = [...identities];
+  const keys: Array<{ type: "school_id"; value: string; fields: string[]; message: string }> = [];
   if (schoolId) keys.push({ type: "school_id", value: schoolId, fields: ["studentNumberNormalized", "studentNumber"], message: SCHOOL_ID_ALREADY_REGISTERED });
   const reservations: Array<{ reference: FirebaseFirestore.DocumentReference; exists: boolean; type: string; value: string; needsOwner: boolean }> = [];
 
@@ -50,7 +48,7 @@ export async function claimStudentIdentities(
     reservations.push({ reference, exists: false, type: key.type, value: normalized, needsOwner: false });
   }
 
-  // All reads precede writes; both identifiers commit with the student profile.
+  // Email is contact information, not an identity reservation.
   for (const reservation of reservations) {
     if (!reservation.exists) transaction.create(reservation.reference, {
       type: reservation.type,

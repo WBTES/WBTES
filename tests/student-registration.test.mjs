@@ -86,6 +86,8 @@ function fixture() {
   const deps = { "server-only": {}, "@/lib/firebase/admin": { adminDb, adminAuth, adminReady: true }, "@/lib/server/api-response": api, "@/lib/server/require-admin": { ApiError } };
   const identities = loadModule("lib/server/student-identities.ts", deps);
   deps["@/lib/server/student-identities"] = identities;
+  deps["@/lib/server/student-auth"] = loadModule("lib/server/student-auth.ts", deps);
+  deps["@/lib/server/student-registry"] = loadModule("lib/server/student-registry.ts", deps);
   const validation = loadModule("lib/server/student-registration.ts", { ...deps, "@/lib/server/school-email": { assertAllowedSchoolEmail() {} } });
   const route = loadModule("app/api/auth/registration/route.ts", {
     ...deps, "@/lib/server/student-registration": validation,
@@ -102,7 +104,7 @@ function fixture() {
   };
 }
 
-test("registration creates one active student, linked School ID and email, and automatic login token", async () => {
+test("registration creates one active student, a unique login identity and automatic login token", async () => {
   const f = fixture();
   const response = await f.register({ email: " Student@GMAIL.com ", studentNumber: " 001-AB " });
   assert.equal(response.status, 201);
@@ -112,20 +114,34 @@ test("registration creates one active student, linked School ID and email, and a
   assert.equal(f.records.users.uid1.role, "student");
   assert.equal(f.records.users.uid1.studentNumber, "001-AB");
   assert.equal(f.records.users.uid1.studentNumberNormalized, "001-ab");
-  assert.equal(f.records.studentRegistry[encodeURIComponent("student@gmail.com")].claimedUid, "uid1");
-  assert.equal(Object.keys(f.records.studentIdentities).length, 2);
+  assert.equal(f.records.studentRegistry.student_uid1.claimedUid, "uid1");
+  assert.equal(f.records.users.uid1.studentRegistryId, "student_uid1");
+  assert.equal(f.records.users.uid1.studentLogin, "school_id");
+  assert.equal(f.records.users.uid1.email, "student@gmail.com");
+  assert.match(f.auth.get("uid1").email, /@students\.wbte\.invalid$/);
+  assert.equal(Object.keys(f.records.studentIdentities).length, 1);
   assert.equal(f.calls.assignments[0].uid, "uid1");
   assert.equal(f.auth.get("uid1").emailVerified, true);
   assert.deepEqual(f.auth.get("uid1").claims, { role: "student", status: "active", departmentId: "cabait" });
 });
 
-test("the same Gmail cannot register a second student with a different School ID", async () => {
+test("the same Gmail can register a different student without changing the first account", async () => {
   const f = fixture(); await f.register();
+  const first = structuredClone(f.records.users.uid1);
   const response = await f.register({ email: " STUDENT@gmail.com ", studentNumber: "other-id" });
-  assert.equal(response.status, 409);
-  assert.match((await response.json()).error, /email.*already registered.*Forgot password/i);
-  assert.equal(f.auth.size, 1);
-  assert.equal(Object.keys(f.records.users).length, 1);
+  assert.equal(response.status, 201);
+  assert.equal(f.auth.size, 2);
+  assert.deepEqual(f.records.users.uid1, first);
+  assert.equal(f.records.users.uid2.email, first.email);
+  assert.notEqual(f.auth.get("uid1").email, f.auth.get("uid2").email);
+});
+
+test("a class sharing an email and network is not blocked by the former email/IP limits", async () => {
+  const f = fixture();
+  for (let i = 0; i < 25; i++) assert.equal((await f.register({ studentNumber: `class-${i}` })).status, 201);
+  assert.equal(f.auth.size, 25);
+  assert.equal(Object.keys(f.records.studentRegistry).length, 25);
+  assert.equal(new Set([...f.auth.values()].map((account) => account.email)).size, 25);
 });
 
 test("the same normalized School ID cannot register with a different Gmail", async () => {
@@ -143,30 +159,30 @@ test("simultaneous registrations for the same School ID produce exactly one acco
   assert.equal(f.auth.size, 1);
   assert.equal(Object.keys(f.records.users).length, 1);
   assert.equal(Object.keys(f.records.studentRegistry).length, 1);
-  assert.equal(Object.keys(f.records.studentIdentities).length, 2);
+  assert.equal(Object.keys(f.records.studentIdentities).length, 1);
   assert.equal(f.calls.deleted.length, 1);
   const winner = Object.keys(f.records.users)[0];
   assert.ok(f.auth.has(winner));
   assert.ok(!f.calls.deleted.includes(winner));
 });
 
-test("simultaneous registrations for the same email return a clear conflict", async () => {
+test("simultaneous registrations sharing an email create independent accounts for different School IDs", async () => {
   const f = fixture();
   const responses = await Promise.all([f.register({}, "one"), f.register({ studentNumber: "other" }, "two")]);
-  assert.deepEqual(responses.map((response) => response.status).sort(), [201, 409]);
-  assert.equal(f.auth.size, 1);
-  assert.equal(Object.keys(f.records.users).length, 1);
+  assert.deepEqual(responses.map((response) => response.status).sort(), [201, 201]);
+  assert.equal(f.auth.size, 2);
+  assert.equal(Object.keys(f.records.users).length, 2);
 });
 
-test("public registration never resets an existing Firebase account without a profile", async () => {
+test("a contact email already used by an existing Firebase account does not replace that account", async () => {
   const f = fixture(); f.auth.set("existing", { uid: "existing", email: "student@gmail.com", password: "original", disabled: true, emailVerified: false });
   const before = structuredClone(f.auth.get("existing"));
   const response = await f.register();
-  assert.equal(response.status, 409);
+  assert.equal(response.status, 201);
   assert.deepEqual(f.auth.get("existing"), before);
   assert.deepEqual(f.calls.updated, []);
   assert.deepEqual(f.calls.deleted, []);
-  assert.equal(Object.keys(f.records.studentIdentities).length, 0);
+  assert.equal(Object.keys(f.records.studentIdentities).length, 1);
 });
 
 test("pending, disabled and active registrations are not deleted or replaced", async () => {
@@ -188,16 +204,16 @@ test("legacy profiles and registry records still prevent duplicate School IDs", 
   }
 });
 
-test("email and School ID reservations remain unavailable after account records are removed", async () => {
+test("School IDs stay reserved after deletion, but their contact emails can be reused", async () => {
   const f = fixture(); await f.register();
   f.records.users = {}; f.records.studentRegistry = {}; f.auth.clear();
-  assert.equal((await f.register({ studentNumber: "other" })).status, 409);
   assert.equal((await f.register({ email: "other@gmail.com" })).status, 409);
-  assert.equal(f.auth.size, 0);
+  assert.equal((await f.register({ studentNumber: "other" })).status, 201);
+  assert.equal(f.auth.size, 1);
 });
 
 test("empty School IDs, overlong IDs, invalid years and weak passwords cannot create accounts", async () => {
-  for (const changes of [{ studentNumber: " " }, { studentNumber: "x".repeat(101) }, { yearLevel: "5th" }, { password: "short" }, { email: "invalid" }]) {
+  for (const changes of [{ studentNumber: " " }, { studentNumber: "A\u0000B" }, { studentNumber: "x".repeat(101) }, { yearLevel: "5th" }, { password: "short" }, { email: "invalid" }]) {
     const f = fixture(); const response = await f.register(changes);
     assert.equal(response.status, 400);
     assert.equal(f.auth.size, 0);
@@ -231,7 +247,7 @@ test("a lost commit acknowledgement cannot delete an account whose registration 
   assert.match((await response.json()).error, /account was created.*Sign in/i);
   assert.equal(f.auth.size, 1);
   assert.equal(Object.keys(f.records.users).length, 1);
-  assert.equal(Object.keys(f.records.studentIdentities).length, 2);
+  assert.equal(Object.keys(f.records.studentIdentities).length, 1);
   assert.deepEqual(f.calls.deleted, []);
 });
 
@@ -252,16 +268,16 @@ test("failure to set claims does not leave duplicate identifier reservations", a
 
 test("admin edits reserve a new School ID without releasing the previously used ID", async () => {
   const f = fixture(); await f.register();
-  const id = encodeURIComponent("student@gmail.com");
+  const id = "student_uid1";
   await f.adminDb.runTransaction((transaction) => f.identities.claimStudentIdentities(transaction, { email: "student@gmail.com", studentNumber: "new-id" }, id, "uid1", true));
-  assert.equal(Object.keys(f.records.studentIdentities).length, 3);
+  assert.equal(Object.keys(f.records.studentIdentities).length, 2);
   assert.equal((await f.register({ email: "other@gmail.com", studentNumber: "new-id" })).status, 409);
   assert.equal((await f.register({ email: "other@gmail.com" })).status, 409);
 });
 
 test("reusing one's own identity reservations is idempotent and cannot change their owner", async () => {
   const f = fixture(); await f.register();
-  const id = encodeURIComponent("student@gmail.com");
+  const id = "student_uid1";
   const before = structuredClone(f.records.studentIdentities);
   await f.adminDb.runTransaction((transaction) => f.identities.claimStudentIdentities(transaction, { email: "student@gmail.com", studentNumber: "001-AB" }, id, "uid1", true));
   assert.deepEqual(f.records.studentIdentities, before);

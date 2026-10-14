@@ -1,4 +1,5 @@
 import "server-only";
+import { FieldValue } from "firebase-admin/firestore";
 
 import { adminDb } from "@/lib/firebase/admin";
 import { studentMatchesTeacherScope } from "@/lib/assignment-scope";
@@ -88,6 +89,7 @@ export async function synchronizeStudentAssignments(student: AppUser) {
   let assignmentsAdded = 0;
   let assignmentsRemoved = 0;
   const writer = adminDb.bulkWriter();
+  const writes: Array<Promise<FirebaseFirestore.WriteResult>> = [];
   assignmentSnapshot.docs.forEach((assignmentDocument) => {
     const assignment = assignmentDocument.data() as TeacherAssignment;
     if (!isMutablePeriod(periods.get(assignment.periodId))) return;
@@ -101,17 +103,17 @@ export async function synchronizeStudentAssignments(student: AppUser) {
     const completed = completedAssignmentIds.has(assignmentDocument.id);
     if ((eligible && included) || (!eligible && (!included || completed))) return;
 
-    writer.update(assignmentDocument.ref, {
+    writes.push(writer.update(assignmentDocument.ref, {
       studentIds: eligible
-        ? [...new Set([...studentIds, student.uid])]
-        : studentIds.filter((studentId) => studentId !== student.uid),
+        ? FieldValue.arrayUnion(student.uid)
+        : FieldValue.arrayRemove(student.uid),
       updatedAt: Date.now(),
-    });
+    }));
     assignmentsUpdated += 1;
     if (eligible) assignmentsAdded += 1;
     else assignmentsRemoved += 1;
   });
-  await writer.close();
+  await Promise.all([...writes, writer.close()]);
   return { assignmentsUpdated, assignmentsAdded, assignmentsRemoved };
 }
 

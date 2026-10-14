@@ -25,6 +25,8 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Enter a valid email address." }, { status: 400 });
   }
 
+  if (email.endsWith("@students.wbte.invalid")) return response();
+
   if (!adminReady || !isSmtpConfigured()) {
     return NextResponse.json(
       { error: "Password recovery is temporarily unavailable. Contact an administrator." },
@@ -53,7 +55,9 @@ export async function POST(request: Request) {
     claimed = true;
 
     try {
-      await adminAuth.getUserByEmail(email);
+      const account = await adminAuth.getUserByEmail(email);
+      const profile = await adminDb.collection("users").doc(account.uid).get();
+      if (!profile.exists || !["admin", "hr", "department_head"].includes(String(profile.data()?.role))) return response();
     } catch (error) {
       if ((error as { code?: string }).code === "auth/user-not-found") {
         return response();

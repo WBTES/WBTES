@@ -13,6 +13,10 @@ export default function ForgotPasswordPage() {
   const [email, setEmail] = React.useState("");
   const [loading, setLoading] = React.useState(false);
   const [done, setDone] = React.useState(false);
+  const [kind, setKind] = React.useState<"student" | "staff">("student");
+  React.useEffect(() => {
+    if (new URLSearchParams(window.location.search).get("role") === "staff") setKind("staff");
+  }, []);
 
   const onSubmit = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -34,9 +38,9 @@ export default function ForgotPasswordPage() {
         <AuthAside
           eyebrow="Account recovery"
           title="Return to your WBTE workspace"
-          description="Request a secure reset link for the email address connected to your account."
+          description="Student account recovery is handled by an administrator. Staff can request an email reset link."
           points={[
-            "A secure reset link is sent to your account email",
+            "Student accounts are identified by School ID",
             "Your assigned role and existing records remain unchanged",
             "Return to sign in after choosing a new password",
           ]}
@@ -44,7 +48,16 @@ export default function ForgotPasswordPage() {
 
         <main className="flex items-center justify-center py-6 lg:py-10">
           <section className="w-full max-w-md rounded-lg border border-slate-200 bg-white p-6 shadow-sm sm:p-8 dark:border-slate-800 dark:bg-slate-900">
-            {done ? (
+            <div className="mb-6 grid grid-cols-2 gap-1 rounded-lg bg-slate-100 p-1 dark:bg-slate-950" role="group" aria-label="Account type">
+              {(["student", "staff"] as const).map((value) => <button key={value} type="button" disabled={loading} aria-pressed={kind === value} onClick={() => { setKind(value); setDone(false); setEmail(""); }} className={`rounded-md px-4 py-2 text-sm font-semibold ${kind === value ? "bg-white text-slate-900 shadow-sm dark:bg-slate-800 dark:text-white" : "text-slate-600 dark:text-slate-400"}`}>{value === "student" ? "Student" : "Staff"}</button>)}
+            </div>
+            {kind === "student" ? <div>
+              <ShieldCheck className="h-5 w-5 text-brand-600 dark:text-blue-300" />
+              <h1 className="mt-3 text-2xl font-bold text-slate-950 dark:text-white">Student account recovery</h1>
+              <p className="mt-3 text-sm leading-relaxed text-slate-600 dark:text-slate-400">Contact a WBTE administrator with your School ID. After confirming your identity, the administrator can reset your password without changing your evaluations or assignments.</p>
+              <p className="mt-3 text-xs text-slate-500 dark:text-slate-400">For your account&apos;s protection, student password reset links are not sent to shared contact emails.</p>
+              <Link href="/login" className="btn-primary mt-6 w-full py-3 text-sm"><ArrowLeft className="h-4 w-4" />Back to sign in</Link>
+            </div> : done ? (
               <div className="text-center">
                 <span className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-emerald-100 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300">
                   <CheckCircle2 className="h-6 w-6" />
