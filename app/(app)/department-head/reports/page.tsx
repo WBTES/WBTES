@@ -9,6 +9,7 @@ import {
 } from "recharts";
 import { PageHeader, inputCls } from "@/components/data-table";
 import { SchoolwideAnalytics } from "@/components/reports/schoolwide-analytics";
+import { formatReportWorkbook } from "@/lib/spreadsheet-format";
 import { authenticatedFetch, readApiResponse } from "@/lib/authenticated-fetch";
 import type { DepartmentHeadReport } from "@/lib/types";
 import toast from "react-hot-toast";
@@ -45,7 +46,7 @@ export default function DepartmentHeadReportsPage() {
   const exportExcel = async () => {
     if (!report) return;
     try {
-      const XLSX = await import("xlsx");
+      const XLSX = await import("xlsx-js-style");
       const workbook = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(report.teachers.map((item) => ({
         Teacher: item.teacherName,
@@ -54,7 +55,7 @@ export default function DepartmentHeadReportsPage() {
       }))), "Teachers");
       XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(report.categories), "Categories");
       XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(report.feedback), "Comment summary");
-      XLSX.writeFile(workbook, `${report.departmentName}-department-report.xlsx`);
+      XLSX.writeFile(formatReportWorkbook(workbook), `${report.departmentName}-department-report.xlsx`);
       toast.success("Excel report exported");
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Excel export failed");

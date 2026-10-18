@@ -20,6 +20,7 @@ import {
 } from "recharts";
 import { collection, getDocs } from "firebase/firestore";
 import { db } from "@/lib/firebase/client";
+import { loadReportQuestions } from "@/lib/firebase/report-questions";
 import { FormField, inputCls, PageHeader } from "@/components/data-table";
 import { SchoolwideAnalytics } from "@/components/reports/schoolwide-analytics";
 import {
@@ -1061,7 +1062,7 @@ export default function AdminReportsPage() {
     teachers,
   ]);
 
-  const exportReport = (kind: "pdf" | "excel") => {
+  const exportReport = async (kind: "pdf" | "excel") => {
     setBusy(true);
 
     try {
@@ -1084,6 +1085,7 @@ export default function AdminReportsPage() {
         const meta = reportMeta(filters, teachers, departments, periods);
 
         const lookups = {
+          questions: kind === "excel" ? await loadReportQuestions(filteredSubmitted) : undefined,
           teachers: Object.fromEntries(
             teachers.map((item) => [item.id, item.displayName])
           ),

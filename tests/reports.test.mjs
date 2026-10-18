@@ -7,7 +7,7 @@ import ts from "typescript";
 const require = createRequire(import.meta.url);
 const { jsPDF } = require("jspdf");
 const autoTable = require("jspdf-autotable").default;
-const XLSX = require("xlsx");
+const XLSX = require("xlsx-js-style");
 
 function loadModule(path, dependencies = {}) {
   const source = readFileSync(new URL(`../${path}`, import.meta.url), "utf8");
@@ -34,7 +34,8 @@ function exporters() {
       tables.push(options);
       autoTable(document, options);
     } },
-    "xlsx": { ...XLSX, writeFile: (workbook, filename) => books.push({ workbook, filename }) },
+    "xlsx-js-style": { ...XLSX, writeFile: (workbook, filename) => books.push({ workbook, filename }) },
+    "@/lib/spreadsheet-format": loadModule("lib/spreadsheet-format.ts"),
     "@/lib/utils-extras": { fmtDateTime: () => "2026-10-05 10:00" },
     "@/lib/report-participation": participationModule,
   });
@@ -192,4 +193,70 @@ test("partial exports distinguish finalized summaries from preliminary response 
   const summary = Object.fromEntries(XLSX.utils.sheet_to_json(workbook.Sheets.Summary, { header: 1 }));
   assert.match(summary["Report status"], /^Partial/);
   assert.equal(summary["Preliminary average"], 13 / 3);
+});
+
+const exportedQuestionIds = ["MjKOaJ4e0hLz3pR09h7d", "zoeDTqRLIkSMPSkw05N7", "NGhz7Ejrrzhfid6qABVl"];
+const questionLookups = {
+  [exportedQuestionIds[0]]: { text: "Explains lessons clearly", type: "rating", category: "Teaching", order: 1 },
+  [exportedQuestionIds[1]]: { text: "Explains lessons clearly", type: "rating", category: "Communication", order: 2 },
+  [exportedQuestionIds[2]]: { text: "Preferred activities", type: "multiple_choice", category: "Engagement", order: 3,
+    options: [{ id: "option-private-id", label: "Practical activities", value: 5 }] },
+};
+
+test("Excel replaces raw question IDs with distinct readable headings and preserves every numeric score", () => {
+  const input = fixture(2);
+  input.evaluations[0].ratings = { [exportedQuestionIds[1]]: 3, [exportedQuestionIds[0]]: 5 };
+  input.evaluations[1].ratings = { [exportedQuestionIds[0]]: 1, [exportedQuestionIds[1]]: 4 };
+  const before = structuredClone(input.evaluations);
+  const exporter = exporters();
+  exporter.exportToExcel(input.evaluations, meta, { ...lookups, questions: questionLookups });
+  const buffer = XLSX.write(exporter.books[0].workbook, { type: "buffer", bookType: "xlsx" });
+  const workbook = XLSX.read(buffer, { type: "buffer" });
+  const headers = XLSX.utils.sheet_to_json(workbook.Sheets.Evaluations, { header: 1 })[0];
+  assert.deepEqual(headers.slice(-2), ["Q1: Explains lessons clearly", "Q2: Explains lessons clearly"]);
+  for (const id of exportedQuestionIds) assert.equal(headers.includes(id), false);
+  const rows = XLSX.utils.sheet_to_json(workbook.Sheets.Evaluations);
+  assert.deepEqual(rows.map((row) => [row[headers.at(-2)], row[headers.at(-1)]]), [[5, 3], [1, 4]]);
+  assert.deepEqual(rows.map((row) => row.AverageScore), before.map((row) => row.averageScore));
+  assert.deepEqual(input.evaluations, before);
+  assert.deepEqual(XLSX.utils.sheet_to_json(workbook.Sheets.Questions).map((row) => row.Category), ["Teaching", "Communication"]);
+});
+
+test("Excel keeps missing answers blank, identifies unavailable questions and resolves saved choice labels", () => {
+  const input = fixture(2);
+  input.evaluations[0].ratings = { [exportedQuestionIds[0]]: 5, [exportedQuestionIds[2]]: "option-private-id", deletedQuestion: 2 };
+  input.evaluations[1].ratings = { [exportedQuestionIds[0]]: 4 };
+  const exporter = exporters();
+  exporter.exportToExcel(input.evaluations, meta, { ...lookups, questions: questionLookups });
+  const workbook = exporter.books[0].workbook;
+  const rows = XLSX.utils.sheet_to_json(workbook.Sheets.Evaluations);
+  assert.equal(rows[0]["Q2: Preferred activities"], "Practical activities");
+  assert.equal(rows[1]["Q2: Preferred activities"], "");
+  assert.equal(rows[0]["Q3: Question unavailable"], 2);
+  assert.equal(rows[1]["Q3: Question unavailable"], "");
+  const reference = XLSX.utils.sheet_to_json(workbook.Sheets.Questions);
+  assert.equal(reference[2]["Question text"], "Question unavailable");
+  assert.equal(reference[2]["Answer type"], "Unavailable");
+});
+
+test("HR Excel uses the same readable questions without exposing student identities or changing comments", () => {
+  const input = fixture(2);
+  input.evaluations[0].ratings = { [exportedQuestionIds[0]]: 5 };
+  input.evaluations[1].ratings = { [exportedQuestionIds[0]]: 3 };
+  const exporter = exporters();
+  exporter.exportTeacherEvaluationReportExcel({
+    teacher: "Teacher One", course: "BSIT", subject: "Subject One", department: "CABAIT",
+    section: "3A", period: "First semester", studentsEvaluated: 2, averageScore: 4,
+    ratingLabel: "Very Good", categoryAverages: [],
+    weightedCommentAnalysis: { groups: [], weightingFactor: 0.5 },
+    strengths: [], areasForDevelopment: [], recommendations: [], analysisSource: "Built-in rules",
+    evaluations: input.evaluations,
+  }, questionLookups);
+  const workbook = exporter.books[0].workbook;
+  const rows = XLSX.utils.sheet_to_json(workbook.Sheets["Anonymous Evaluation Data"]);
+  assert.deepEqual(rows.map((row) => row["Q1: Explains lessons clearly"]), [5, 3]);
+  assert.deepEqual(rows.map((row) => row.AnonymousResponse), [1, 2]);
+  assert.equal(rows[0].AnonymousComment, "Anonymous feedback");
+  assert.equal(JSON.stringify(rows).includes("private-student"), false);
+  assert.ok(workbook.Sheets.Questions);
 });

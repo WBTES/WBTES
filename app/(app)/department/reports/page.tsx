@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 import { collection, doc, getDoc, getDocs, query, where } from "firebase/firestore";
 import { db, firebaseReady } from "@/lib/firebase/client";
+import { loadReportQuestions } from "@/lib/firebase/report-questions";
 import { PageHeader, FormField, inputCls } from "@/components/data-table";
 import { exportToPDF, exportToExcel } from "@/lib/reports";
 import { useAuth } from "@/lib/firebase/auth-context";
@@ -186,6 +187,7 @@ export default function DeptReportsPage() {
     setBusy(true);
     try {
       const lookups = {
+        questions: kind === "excel" ? await loadReportQuestions(filtered) : undefined,
         teachers: Object.fromEntries(teachers.map((item) => [item.id, item.displayName])),
         subjects: Object.fromEntries(subjects.map((item) => [item.id, item.name])),
         departments: { [myDept.id]: myDept.name },

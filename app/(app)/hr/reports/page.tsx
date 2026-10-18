@@ -13,6 +13,7 @@ import {
 } from "lucide-react";
 import { collection, getDocs } from "firebase/firestore";
 import { db, firebaseReady } from "@/lib/firebase/client";
+import { loadReportQuestions } from "@/lib/firebase/report-questions";
 import { useAuth } from "@/lib/firebase/auth-context";
 import { PageHeader, FormField, inputCls } from "@/components/data-table";
 import { TeacherEvaluationReport } from "@/components/hr/teacher-evaluation-report";
@@ -193,7 +194,7 @@ export default function HrReportsPage() {
     };
   }, [filteredEvaluations, generatedReport, programs, selectedDepartment, selectedPeriod, selectedSubject, teacher]);
 
-  const exportReport = (kind: "pdf" | "excel") => {
+  const exportReport = async (kind: "pdf" | "excel") => {
     if (!reportData) {
       toast.error("Select a teacher, subject, and evaluation period with released results.");
       return;
@@ -203,7 +204,8 @@ export default function HrReportsPage() {
       if (kind === "pdf") {
         exportTeacherEvaluationReportPDF(reportData);
       } else {
-        exportTeacherEvaluationReportExcel(reportData);
+        const questions = await loadReportQuestions(reportData.evaluations);
+        exportTeacherEvaluationReportExcel(reportData, questions);
       }
       toast.success(kind === "pdf" ? "PDF report downloaded successfully" : "Excel report exported successfully");
     } catch (exportError) {

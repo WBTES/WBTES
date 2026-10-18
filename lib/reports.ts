@@ -1,9 +1,11 @@
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
-import * as XLSX from "xlsx";
+import * as XLSX from "xlsx-js-style";
+import { formatReportWorkbook } from "@/lib/spreadsheet-format";
 import type {
   CategoryAverage,
   Evaluation,
+  EvaluationQuestion,
   WeightedCommentAnalysis,
 } from "@/lib/types";
 import { fmtDateTime } from "@/lib/utils-extras";
@@ -22,6 +24,7 @@ export type EvaluationLookups = {
   subjects?: Record<string, string>;
   periods?: Record<string, string>;
   programs?: Record<string, string>;
+  questions?: Record<string, Pick<EvaluationQuestion, "text" | "type" | "category" | "options" | "order">>;
 };
 
 type EvaluationExportOptions = {
@@ -32,6 +35,42 @@ type EvaluationExportOptions = {
 
 type AdditionalTable = { title: string; headers: string[]; rows: Array<Array<string | number>> };
 type AdditionalSheet = { name: string; rows: Array<Record<string, string | number>> };
+
+function evaluationQuestionColumns(evaluations: Evaluation[], questions: EvaluationLookups["questions"] = {}) {
+  const ids = [...new Set(evaluations.flatMap((evaluation) => Object.keys(evaluation.ratings)))];
+  ids.sort((a, b) => (questions[a]?.order ?? Number.MAX_SAFE_INTEGER)
+    - (questions[b]?.order ?? Number.MAX_SAFE_INTEGER) || a.localeCompare(b));
+  return ids.map((id, index) => {
+    const question = questions[id];
+    const label = `Q${index + 1}`;
+    const text = question?.text?.trim() || "Question unavailable";
+    return { id, question, label, text, header: `${label}: ${text}` };
+  });
+}
+
+function evaluationAnswerCells(evaluation: Evaluation, columns: ReturnType<typeof evaluationQuestionColumns>) {
+  return Object.fromEntries(columns.map(({ id, question, header }) => {
+    const value = evaluation.ratings[id];
+    const answer = question?.type === "multiple_choice" && typeof value === "string"
+      ? question.options?.find((option) => option.id === value)?.label ?? value
+      : value;
+    return [header, typeof answer === "string" ? safeSpreadsheetText(answer) : answer ?? ""];
+  }));
+}
+
+function evaluationQuestionSheet(columns: ReturnType<typeof evaluationQuestionColumns>): AdditionalSheet {
+  return {
+    name: "Questions",
+    rows: columns.map(({ question, label, text }) => ({
+      Question: label,
+      "Question text": safeSpreadsheetText(text),
+      Category: safeSpreadsheetText(question?.category ?? ""),
+      "Answer type": question?.type === "rating" ? "Rating" : question?.type === "multiple_choice"
+        ? "Multiple choice" : question?.type === "text" ? "Open text" : "Unavailable",
+      "Answer choices": safeSpreadsheetText(question?.options?.map((option) => option.label).join(" | ") ?? ""),
+    })),
+  };
+}
 
 function participationRows(participation: ReportParticipation[], lookups: EvaluationLookups) {
   return participation.map((row) => ({
@@ -138,6 +177,7 @@ export function exportToExcel(
   lookups: EvaluationLookups = {},
   options: EvaluationExportOptions = {}
 ) {
+  const questionColumns = evaluationQuestionColumns(evaluations, lookups.questions);
   const rows = evaluations.map((evaluation) => ({
     Teacher: lookups.teachers?.[evaluation.teacherId] ?? evaluation.teacherId,
     Subject: lookups.subjects?.[evaluation.subjectId] ?? evaluation.subjectId,
@@ -147,7 +187,7 @@ export function exportToExcel(
     Period: lookups.periods?.[evaluation.periodId] ?? evaluation.periodId,
     AverageScore: evaluation.averageScore,
     AnonymousComment: evaluation.comment ?? "",
-    ...evaluation.ratings,
+    ...evaluationAnswerCells(evaluation, questionColumns),
   }));
   exportRowsToExcel(
     rows,
@@ -168,6 +208,7 @@ export function exportToExcel(
     [
       ...(options.participation ? [{ name: "Teacher Participation", rows: participationRows(options.participation, lookups) }] : []),
       ...(options.finalizedRatings ? [{ name: "Finalized Ratings", rows: finalizedRatingRows(options.finalizedRatings, lookups) }] : []),
+      ...(questionColumns.length ? [evaluationQuestionSheet(questionColumns)] : []),
     ]
   );
 }
@@ -385,7 +426,10 @@ export function exportTeacherEvaluationReportPDF(report: TeacherEvaluationReport
   document.save(`WBTE-Teacher-Evaluation-${Date.now()}.pdf`);
 }
 
-export function exportTeacherEvaluationReportExcel(report: TeacherEvaluationReportData) {
+export function exportTeacherEvaluationReportExcel(
+  report: TeacherEvaluationReportData,
+  questions: EvaluationLookups["questions"] = {}
+) {
   const workbook = XLSX.utils.book_new();
   const summary = XLSX.utils.aoa_to_sheet([
     ["TEACHER EVALUATION REPORT"],
@@ -450,20 +494,25 @@ export function exportTeacherEvaluationReportExcel(report: TeacherEvaluationRepo
     "HR Recommendations"
   );
 
+  const questionColumns = evaluationQuestionColumns(report.evaluations, questions);
   const evaluationRows = report.evaluations.map((evaluation, index) => ({
     AnonymousResponse: index + 1,
     Program: safeSpreadsheetText(evaluation.course ?? ""),
     YearLevel: safeSpreadsheetText(evaluation.yearLevel ?? ""),
     AverageScore: evaluation.averageScore,
     AnonymousComment: safeSpreadsheetText(evaluation.comment ?? ""),
-    ...evaluation.ratings,
+    ...evaluationAnswerCells(evaluation, questionColumns),
   }));
   XLSX.utils.book_append_sheet(
     workbook,
     XLSX.utils.json_to_sheet(evaluationRows),
     "Anonymous Evaluation Data"
   );
-  XLSX.writeFile(workbook, `WBTE-Teacher-Evaluation-${Date.now()}.xlsx`);
+  if (questionColumns.length) {
+    const reference = evaluationQuestionSheet(questionColumns);
+    XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(reference.rows), reference.name);
+  }
+  XLSX.writeFile(formatReportWorkbook(workbook), `WBTE-Teacher-Evaluation-${Date.now()}.xlsx`);
 }
 
 export function exportRowsToPDF<T>(
@@ -534,7 +583,7 @@ export function exportRowsToExcel(
     const safeRows = sheet.rows.map((row) => Object.fromEntries(Object.entries(row).map(([key, value]) => [key, typeof value === "string" ? safeSpreadsheetText(value) : value])));
     XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(safeRows), sheet.name.slice(0, 31));
   });
-  XLSX.writeFile(workbook, filename);
+  XLSX.writeFile(formatReportWorkbook(workbook), filename);
 }
 
 function average(evaluations: Evaluation[]) {
