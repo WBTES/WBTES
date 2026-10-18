@@ -1,10 +1,10 @@
 "use client";
 
 import * as React from "react";
-import { Activity, BarChart3, Download, FileSpreadsheet, LockKeyhole, MessageSquareText, Star, TrendingUp, Users } from "lucide-react";
+import { Activity, BarChart3, Download, FileSpreadsheet, MessageSquareText, Star, Users } from "lucide-react";
 import { motion, useReducedMotion } from "framer-motion";
 import {
-  Bar, BarChart, CartesianGrid, Cell, Legend, Line, LineChart, Pie, PieChart,
+  Bar, BarChart, CartesianGrid, Cell, Legend, Pie, PieChart,
   ResponsiveContainer, Tooltip, XAxis, YAxis,
 } from "recharts";
 import { PageHeader, inputCls } from "@/components/data-table";
@@ -54,7 +54,6 @@ export default function DepartmentHeadReportsPage() {
       }))), "Teachers");
       XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(report.categories), "Categories");
       XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(report.feedback), "Comment summary");
-      XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(report.themes), "Themes");
       XLSX.writeFile(workbook, `${report.departmentName}-department-report.xlsx`);
       toast.success("Excel report exported");
     } catch (error) {
@@ -70,7 +69,7 @@ export default function DepartmentHeadReportsPage() {
       pdf.setFontSize(18); pdf.text("WBTE Department Report", 14, 18);
       pdf.setFontSize(11); pdf.text(report.departmentName, 14, 27);
       pdf.text(`Responses: ${report.responseCount}`, 14, 37);
-      pdf.text(`Average rating: ${report.averageRating ?? "Protected"}`, 14, 44);
+      pdf.text(`Average rating: ${report.averageRating?.toFixed(2) ?? "N/A"}`, 14, 44);
       pdf.text(`Privacy threshold: ${report.minimumResponses} responses`, 14, 51);
       let y = 63;
       pdf.setFontSize(13); pdf.text("Category ratings", 14, y); y += 8;
@@ -106,9 +105,7 @@ export default function DepartmentHeadReportsPage() {
 
 function ReportBody({ report }: { report: DepartmentHeadReport }) {
   const reduceMotion = useReducedMotion();
-  const teacherData = report.teachers.filter((item) => item.average !== null);
   const hasFeedback = report.feedback.some((item) => item.count > 0);
-  const hasTrends = report.trends.some((item) => item.average !== null);
   const panelMotion = reduceMotion
     ? {}
     : { initial: { opacity: 0, y: 14 }, animate: { opacity: 1, y: 0 } };
@@ -118,46 +115,17 @@ function ReportBody({ report }: { report: DepartmentHeadReport }) {
       <Metric label="Teachers" value={report.teacherCount} detail="School-wide faculty" icon={Users} tone="brand" />
       <Metric label="Closed periods" value={report.periods.length} detail="Available for reporting" icon={BarChart3} tone="brand" />
       <Metric label="Released responses" value={report.responseCount} detail="From closed periods" icon={BarChart3} tone="emerald" />
-      <Metric label="Average rating" value={report.averageRating?.toFixed(2) ?? "Protected"} detail="Out of 5.00" icon={Star} tone="amber" />
+      <Metric label="Average rating" value={report.averageRating !== null && report.averageRating !== undefined ? report.averageRating.toFixed(2) : "N/A"} detail="Out of 5.00" icon={Star} tone="amber" />
       <Metric label="Analyzed comments" value={report.feedback.reduce((sum, item) => sum + item.count, 0)} detail="Anonymous responses" icon={MessageSquareText} tone="cyan" />
     </motion.div>
-    {report.resultsProtected && (
-      <motion.div {...panelMotion} transition={{ duration: 0.35, delay: 0.05 }} className="flex gap-3 rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200">
-        <LockKeyhole className="h-5 w-5 shrink-0" />
-        <div className="min-w-0 flex-1">
-          <p className="font-semibold">Results are privacy protected</p>
-          <p className="mt-1 text-amber-800/80 dark:text-amber-200/75">
-            The threshold counts submitted responses, not closed periods. This view has {report.responseCount} of {report.minimumResponses} required responses.
-          </p>
-          <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-amber-200/70 dark:bg-amber-950/60">
-            <div
-              className="h-full rounded-full bg-amber-500 transition-[width] duration-700"
-              style={{ width: `${Math.min((report.responseCount / report.minimumResponses) * 100, 100)}%` }}
-            />
-          </div>
-        </div>
-      </motion.div>
-    )}
     <div className="grid min-w-0 gap-4 xl:grid-cols-2">
       <ChartPanel title="Rating by category" description="Average score across evaluation categories" icon={BarChart3} motionProps={panelMotion} delay={0.1}>
-        {report.categories.length ? <CategoryChart data={report.categories} reduceMotion={Boolean(reduceMotion)} /> : <Empty protectedResults={report.resultsProtected} />}
+        {report.categories.length ? <CategoryChart data={report.categories} reduceMotion={Boolean(reduceMotion)} /> : <Empty protectedResults={false} />}
       </ChartPanel>
       <ChartPanel title="Comment classification" description="Distribution of anonymous feedback" icon={MessageSquareText} motionProps={panelMotion} delay={0.15}>
-        {hasFeedback ? <FeedbackChart data={report.feedback} reduceMotion={Boolean(reduceMotion)} /> : <Empty protectedResults={report.resultsProtected} />}
-      </ChartPanel>
-      <ChartPanel title="Rating trend" description="Released average rating by evaluation period" icon={TrendingUp} motionProps={panelMotion} delay={0.2}>
-        {hasTrends ? <TrendChart data={report.trends} reduceMotion={Boolean(reduceMotion)} /> : <Empty protectedResults={report.resultsProtected} />}
-      </ChartPanel>
-      <ChartPanel title="Teacher comparison" description="Released teacher averages, ranked highest first" icon={Users} motionProps={panelMotion} delay={0.25}>
-        {teacherData.length ? <TeacherChart data={teacherData} reduceMotion={Boolean(reduceMotion)} /> : <Empty protectedResults={report.resultsProtected} />}
+        {hasFeedback ? <FeedbackChart data={report.feedback} reduceMotion={Boolean(reduceMotion)} /> : <Empty protectedResults={false} />}
       </ChartPanel>
     </div>
-    <motion.section {...panelMotion} transition={{ duration: 0.4, delay: 0.3 }} className="border-t border-slate-200 pt-5 dark:border-slate-800">
-      <h2 className="text-base font-semibold">Most common anonymous feedback themes</h2>
-      <div className="mt-3 divide-y divide-slate-200 border-y border-slate-200 dark:divide-slate-800 dark:border-slate-800">
-        {report.themes.length ? report.themes.map((theme) => <div key={`${theme.type}-${theme.name}`} className="flex items-center justify-between gap-4 py-3 text-sm"><span>{theme.name}</span><span className="font-semibold">{theme.count}</span></div>) : <p className="py-8 text-center text-sm text-slate-500">No themes available.</p>}
-      </div>
-    </motion.section>
   </div>;
 }
 
@@ -180,16 +148,6 @@ function CategoryChart({ data, reduceMotion }: { data: DepartmentHeadReport["cat
 function FeedbackChart({ data, reduceMotion }: { data: DepartmentHeadReport["feedback"]; reduceMotion: boolean }) {
   const total = data.reduce((sum, item) => sum + item.count, 0);
   return <div className="relative h-full"><ResponsiveContainer width="100%" height="100%"><PieChart><Pie data={data} dataKey="count" nameKey="label" innerRadius={58} outerRadius={88} paddingAngle={3} stroke="none" isAnimationActive={!reduceMotion} animationDuration={1000} animationEasing="ease-out">{data.map((item, index) => <Cell key={item.type} fill={FEEDBACK_COLORS[index % FEEDBACK_COLORS.length]} />)}</Pie><Tooltip content={<ChartTooltip suffix=" comments" />} /><Legend verticalAlign="bottom" iconType="circle" iconSize={8} wrapperStyle={{ fontSize: 11, color: "#94a3b8", paddingTop: 10 }} /></PieChart></ResponsiveContainer><div className="pointer-events-none absolute inset-x-0 top-[42%] -translate-y-1/2 text-center"><strong className="block text-2xl text-slate-950 dark:text-white">{total}</strong><span className="text-[11px] text-slate-500">comments</span></div></div>;
-}
-
-function TrendChart({ data, reduceMotion }: { data: DepartmentHeadReport["trends"]; reduceMotion: boolean }) {
-  return <ResponsiveContainer width="100%" height="100%"><LineChart data={data} margin={{ top: 18, right: 20, bottom: 18, left: -12 }}><CartesianGrid vertical={false} strokeDasharray="3 3" stroke={GRID_COLOR} /><XAxis dataKey="periodName" tick={AXIS_TICK} axisLine={false} tickLine={false} minTickGap={18} tickFormatter={shortLabel} /><YAxis domain={[0, 5]} tick={AXIS_TICK} axisLine={false} tickLine={false} /><Tooltip content={<ChartTooltip suffix=" / 5" />} /><Line type="monotone" dataKey="average" name="Average rating" stroke="#10b981" strokeWidth={3} connectNulls={false} dot={{ r: 4, fill: "#10b981", stroke: "#fff", strokeWidth: 2 }} activeDot={{ r: 7, strokeWidth: 0 }} isAnimationActive={!reduceMotion} animationDuration={1100} animationEasing="ease-out" /></LineChart></ResponsiveContainer>;
-}
-
-function TeacherChart({ data, reduceMotion }: { data: DepartmentHeadReport["teachers"]; reduceMotion: boolean }) {
-  const sorted = [...data].sort((a, b) => (b.average ?? 0) - (a.average ?? 0));
-  const chartHeight = Math.max(250, sorted.length * 42);
-  return <div className="h-full overflow-y-auto pr-1"><div style={{ height: chartHeight }}><ResponsiveContainer width="100%" height="100%"><BarChart data={sorted} layout="vertical" margin={{ top: 4, right: 24, bottom: 4, left: 0 }}><CartesianGrid horizontal={false} strokeDasharray="3 3" stroke={GRID_COLOR} /><XAxis type="number" domain={[0, 5]} tick={AXIS_TICK} axisLine={false} tickLine={false} /><YAxis type="category" dataKey="teacherName" width={112} tick={AXIS_TICK} axisLine={false} tickLine={false} tickFormatter={shortLabel} /><Tooltip content={<ChartTooltip suffix=" / 5" />} cursor={{ fill: "rgba(148,163,184,0.08)" }} /><Bar dataKey="average" name="Average rating" fill="#06b6d4" radius={[0, 6, 6, 0]} maxBarSize={26} isAnimationActive={!reduceMotion} animationBegin={120} animationDuration={950} animationEasing="ease-out" /></BarChart></ResponsiveContainer></div></div>;
 }
 
 function ChartPanel({ title, description, icon: Icon, children, motionProps, delay }: { title: string; description: string; icon: React.ComponentType<{ className?: string }>; children: React.ReactNode; motionProps: Record<string, unknown>; delay: number }) {

@@ -16,10 +16,10 @@ const inputClass =
 export default function LoginPage() {
   const router = useRouter();
   const reduceMotion = useReducedMotion();
-  const { signIn, signInWithGoogle, user, profile, loading } = useAuth();
+  const { signIn, user, profile, loading } = useAuth();
   const [showPassword, setShowPassword] = React.useState(false);
   const [submitting, setSubmitting] = React.useState(false);
-  const [googleLoading, setGoogleLoading] = React.useState(false);
+  const [kind, setKind] = React.useState<"student" | "staff">("student");
   const [form, setForm] = React.useState({ identifier: "", password: "" });
   const noticeShown = React.useRef(false);
 
@@ -47,26 +47,13 @@ export default function LoginPage() {
     event.preventDefault();
     setSubmitting(true);
     try {
-      await signIn(form.identifier.trim(), form.password);
+      await signIn(form.identifier.trim(), form.password, kind);
       toast.success("Welcome back");
       router.push("/dashboard");
     } catch (error: unknown) {
       toast.error(getAuthErrorMessage(error, "Sign in failed."));
     } finally {
       setSubmitting(false);
-    }
-  };
-
-  const onGoogle = async () => {
-    setGoogleLoading(true);
-    try {
-      await signInWithGoogle();
-      toast.success("Signed in with Google");
-      router.push("/dashboard");
-    } catch (error: unknown) {
-      toast.error(getAuthErrorMessage(error, "Google sign-in failed."));
-    } finally {
-      setGoogleLoading(false);
     }
   };
 
@@ -100,32 +87,24 @@ export default function LoginPage() {
               Sign in to WBTE
             </h1>
             <p className="mt-3 text-sm leading-relaxed text-slate-600 dark:text-slate-400">
-              Students may use their school Google account or email and password. Staff use administrator-issued credentials; HR and department heads verify their email first.
+              Students sign in with their School ID. Staff use their administrator-issued username or email.
             </p>
 
-            <button
-              type="button"
-              onClick={onGoogle}
-              disabled={googleLoading || submitting || loading}
-              className="mt-6 flex w-full items-center justify-center gap-2 rounded-lg bg-white px-4 py-3 text-sm font-semibold text-slate-700 shadow-sm ring-1 ring-slate-200 transition-colors hover:bg-slate-100 disabled:pointer-events-none disabled:opacity-50 dark:bg-slate-950 dark:text-slate-200 dark:ring-slate-800 dark:hover:bg-slate-800"
-            >
-              {googleLoading ? (
-                <span className="h-4 w-4 animate-spin rounded-full border-2 border-slate-300 border-t-brand-600" />
-              ) : (
-                <GoogleIcon />
-              )}
-            </button>
-
-            <div className="my-6 flex items-center gap-3">
-              <span className="h-px flex-1 bg-slate-200 dark:bg-slate-800" />
-              <span className="text-xs text-slate-500">or use staff credentials</span>
-              <span className="h-px flex-1 bg-slate-200 dark:bg-slate-800" />
+            <div className="my-6 grid grid-cols-2 gap-1 rounded-lg bg-slate-200 p-1 dark:bg-slate-950" role="group" aria-label="Account type">
+              {(["student", "staff"] as const).map((option) => (
+                <button key={option} type="button" aria-pressed={kind === option}
+                  disabled={submitting || loading}
+                  onClick={() => { setKind(option); setForm({ identifier: "", password: "" }); }}
+                  className={`rounded-md px-3 py-2 text-sm font-semibold transition-colors ${kind === option ? "bg-white text-slate-950 shadow-sm dark:bg-slate-800 dark:text-white" : "text-slate-600 dark:text-slate-400"}`}>
+                  {option === "student" ? "Student" : "Staff"}
+                </button>
+              ))}
             </div>
 
             <form onSubmit={onSubmit} className="space-y-4">
               <div>
                 <label htmlFor="login-identifier" className="text-sm font-medium text-slate-800 dark:text-slate-200">
-                  Username or email
+                  {kind === "student" ? "School ID" : "Username or email"}
                 </label>
                 <div className="relative mt-2">
                   <UserRound className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
@@ -136,7 +115,8 @@ export default function LoginPage() {
                     autoComplete="username"
                     value={form.identifier}
                     onChange={(event) => setForm({ ...form, identifier: event.target.value })}
-                    placeholder="username or you@school.edu"
+                    placeholder={kind === "student" ? "Enter your School ID" : "username or you@school.edu"}
+                    maxLength={kind === "student" ? 100 : 254}
                     className={inputClass}
                   />
                 </div>
@@ -148,7 +128,7 @@ export default function LoginPage() {
                     Password
                   </label>
                   <Link
-                    href="/forgot-password"
+                    href={`/forgot-password?role=${kind}`}
                     className="text-xs font-semibold text-brand-700 hover:text-brand-800 dark:text-blue-300 dark:hover:text-blue-200"
                   >
                     Forgot password?
@@ -179,7 +159,7 @@ export default function LoginPage() {
 
               <button
                 type="submit"
-                disabled={submitting || googleLoading || loading}
+                disabled={submitting || loading}
                 className="btn-primary w-full py-3 text-sm"
               >
                 {submitting ? (
@@ -210,16 +190,5 @@ export default function LoginPage() {
         </main>
       </div>
     </div>
-  );
-}
-
-function GoogleIcon() {
-  return (
-    <svg viewBox="0 0 24 24" className="h-4 w-4" aria-hidden="true">
-      <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09Z" />
-      <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.99.66-2.25 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84A11 11 0 0 0 12 23Z" />
-      <path fill="#FBBC05" d="M5.84 14.1A6.6 6.6 0 0 1 5.5 12c0-.73.13-1.44.34-2.1V7.07H2.18A11 11 0 0 0 1 12c0 1.77.43 3.45 1.18 4.93l3.66-2.83Z" />
-      <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.65l3.15-3.15C17.46 2.09 14.97 1 12 1A11 11 0 0 0 2.18 7.07l3.66 2.83C6.71 7.31 9.14 5.38 12 5.38Z" />
-    </svg>
   );
 }

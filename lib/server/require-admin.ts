@@ -2,6 +2,7 @@ import "server-only";
 
 import { adminAuth, adminDb, adminReady } from "@/lib/firebase/admin";
 import type { AppUser, UserRole } from "@/lib/types";
+import { findStudentRegistryReference } from "@/lib/server/student-registry";
 
 export class ApiError extends Error {
   constructor(public status: number, message: string) {
@@ -30,16 +31,22 @@ export async function requireAuthenticatedAppUser(request: Request) {
     uid: decoded.uid,
     ...(snapshot.data() as Omit<AppUser, "uid">),
   };
+  if (profile.role === "student" && decoded.firebase?.sign_in_provider === "google.com") {
+    throw new ApiError(403, "Students sign in with their School ID and password.");
+  }
   if (profile.status === "pending") {
     if (profile.role !== "student") {
       throw new ApiError(403, "This staff account is not active. Contact an administrator.");
     }
     const now = Date.now();
-    const email = String(profile.email ?? decoded.email ?? "");
-    const registryRef = adminDb
-      .collection("studentRegistry")
-      .doc(encodeURIComponent(email.toLowerCase()));
+    const registryRef = await findStudentRegistryReference(decoded.uid, profile);
     const registry = await registryRef.get();
+    if (registry.data()?.status === "disabled") {
+      throw new ApiError(403, "This student registration has been deactivated.");
+    }
+    if (registry.data()?.claimedUid && registry.data()?.claimedUid !== decoded.uid) {
+      throw new ApiError(409, "This student record is linked to another account.");
+    }
     const batch = adminDb.batch();
     batch.set(snapshot.ref, {
       status: "active",

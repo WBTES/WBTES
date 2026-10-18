@@ -44,33 +44,43 @@ export default function DashboardOverview() {
     setStatsError("");
     try {
       if (profile.role === "admin") {
-        // Run each count independently so one failure doesn't break all stats
         const safe = async <T,>(p: Promise<T>, fallback: T): Promise<T> => {
           try { return await p; } catch (e) { console.warn("stat load failed:", e); return fallback; }
         };
-        const [users, teachers, students, depts, periods, evals] = await Promise.all([
+
+        const [users, teachers, studentsSnap, depts, periods] = await Promise.all([
           safe(getCountFromServer(collection(db, "users")), { data: () => ({ count: 0 }) } as any),
           safe(getCountFromServer(collection(db, "teachers")), { data: () => ({ count: 0 }) } as any),
-          safe(getCountFromServer(query(collection(db, "users"), where("role", "==", "student"))), { data: () => ({ count: 0 }) } as any),
+          safe(getDocs(query(collection(db, "users"), where("role", "==", "student"))), null),
           safe(getCountFromServer(collection(db, "departments")), { data: () => ({ count: 0 }) } as any),
           safe(getCountFromServer(collection(db, "evaluationPeriods")), { data: () => ({ count: 0 }) } as any),
-          safe(getCountFromServer(collection(db, "evaluations")), { data: () => ({ count: 0 }) } as any),
         ]);
-        const evalCount = evals.data().count;
-        // Compute average rating + completion in a single pass
+
+        const validStudentIds = new Set<string>();
+        if (studentsSnap) {
+          studentsSnap.forEach((doc) => validStudentIds.add(doc.id));
+        }
+        const totalStudentsCount = validStudentIds.size;
         let totalScore = 0;
         let reportableEvaluationCount = 0;
         let totalSlots = 0;
-        let completedStudents = 0;
-        let pendingStudents = 0;
         let completedSlots = 0;
+        let exactCompletedEvaluationsCount = 0;
+        
+        let completedStudentsCount = 0;
+        let pendingStudentsCount = 0;
+        
         try {
           const [evalsSnap, assignsSnap, completionSnap] = await Promise.all([
             getDocs(collection(db, "evaluations")),
             getDocs(collection(db, "teacherAssignments")),
             getDocs(collection(db, "evaluationCompletions")),
           ]);
-          const slots = new Map<string, { studentId: string; completed: boolean }>();
+          
+          const evaluationRows = evalsSnap.docs.map((d) => ({
+            id: d.id,
+            ...(d.data() as Omit<Evaluation, "id">),
+          }));
           const assignmentRows = assignsSnap.docs.map((d) => ({
             id: d.id,
             ...(d.data() as Omit<TeacherAssignment, "id">),
@@ -79,65 +89,88 @@ export default function DashboardOverview() {
             id: d.id,
             ...(d.data() as Omit<EvaluationCompletion, "id">),
           }));
-          const evaluationRows = evalsSnap.docs.map((d) => ({
-            id: d.id,
-            ...(d.data() as Omit<Evaluation, "id">),
-          }));
+
+          // Count valid/active student evaluation completions directly from evaluationCompletions collection
+          completionRows.forEach((c) => {
+            if (c.studentId && validStudentIds.has(c.studentId)) {
+              exactCompletedEvaluationsCount++;
+            }
+          });
+          
           const finalEvaluationRows = reportableEvaluations(evaluationRows, assignmentRows, completionRows);
           reportableEvaluationCount = finalEvaluationRows.length;
           finalEvaluationRows.forEach((data) => {
             if (typeof data.averageScore === "number") totalScore += data.averageScore;
           });
+
+          const studentAssignmentsMap = new Map<string, Set<string>>();
           assignsSnap.forEach((d) => {
             const data = d.data() as TeacherAssignment;
             if (!Array.isArray(data.studentIds)) return;
             data.studentIds.forEach((studentId) => {
-              const key = `${studentId}_${d.id}`;
-              if (!slots.has(key)) {
-                slots.set(key, { studentId, completed: false });
-              }
+              if (!validStudentIds.has(studentId)) return;
+              const currentSet = studentAssignmentsMap.get(studentId) ?? new Set<string>();
+              currentSet.add(d.id);
+              studentAssignmentsMap.set(studentId, currentSet);
             });
           });
+
+          const studentCompletionsMap = new Map<string, Set<string>>();
           completionSnap.forEach((d) => {
-            const completion = d.data() as EvaluationCompletion;
-            const slot = slots.get(
-              `${completion.studentId}_${completion.assignmentId}`
-            );
-            if (slot) slot.completed = true;
+            const data = d.data() as EvaluationCompletion;
+            if (!data.studentId || !data.assignmentId) return;
+            if (!validStudentIds.has(data.studentId)) return;
+            const currentSet = studentCompletionsMap.get(data.studentId) ?? new Set<string>();
+            currentSet.add(data.assignmentId);
+            studentCompletionsMap.set(data.studentId, currentSet);
           });
-          totalSlots = slots.size;
-          completedSlots = [...slots.values()].filter((slot) => slot.completed).length;
-          const progress = new Map<string, { assigned: number; completed: number }>();
-          slots.forEach((slot) => {
-            const item = progress.get(slot.studentId) ?? { assigned: 0, completed: 0 };
-            item.assigned += 1;
-            if (slot.completed) item.completed += 1;
-            progress.set(slot.studentId, item);
+
+          let totalComputedSlots = 0;
+          let totalCompletedSlotsCount = 0;
+          
+          studentAssignmentsMap.forEach((assignedSet, studentId) => {
+            const completedSet = studentCompletionsMap.get(studentId) ?? new Set<string>();
+            const assignedCount = assignedSet.size;
+            const completedCount = [...assignedSet].filter((id) => completedSet.has(id)).length;
+
+            totalComputedSlots += assignedCount;
+            totalCompletedSlotsCount += completedCount;
+
+            if (assignedCount > 0 && completedCount >= assignedCount) {
+              completedStudentsCount++;
+            } else if (assignedCount > 0) {
+              pendingStudentsCount++;
+            }
           });
-          completedStudents = [...progress.values()].filter(
-            (item) => item.assigned > 0 && item.completed === item.assigned
-          ).length;
-          pendingStudents = [...progress.values()].filter(
-            (item) => item.completed < item.assigned
-          ).length;
+
+          const studentsWithAssignments = studentAssignmentsMap.size;
+          const unregisteredOrAssignedStudents = Math.max(0, totalStudentsCount - studentsWithAssignments);
+          pendingStudentsCount += unregisteredOrAssignedStudents;
+
+          totalSlots = totalComputedSlots;
+          completedSlots = totalCompletedSlotsCount;
         } catch (e) {
           console.warn("admin avg/completion calc failed:", e);
         }
+
         const avg = reportableEvaluationCount > 0
           ? (totalScore / reportableEvaluationCount).toFixed(2)
           : "—";
         const completion = totalSlots > 0 ? Math.round((completedSlots / totalSlots) * 100) : 0;
+        
         setStats({
           users: users.data().count,
           teachers: teachers.data().count,
-          students: students.data().count,
+          students: totalStudentsCount,
           depts: depts.data().count,
           periods: periods.data().count,
-          evaluations: evalCount,
+          evaluations: exactCompletedEvaluationsCount, // Returns exact count of finished student-teacher evaluations
           avg,
           completion,
-          completedStudents,
-          pendingStudents,
+          completedStudents: completedStudentsCount,
+          pendingStudents: pendingStudentsCount,
+          totalAssignedEvaluations: totalSlots,
+          totalCompletedEvaluations: completedSlots,
         });
       } else if (profile.role === "student") {
         const safe = async <T,>(p: Promise<T>, fallback: T): Promise<T> => {
@@ -252,7 +285,6 @@ export default function DashboardOverview() {
         </div>
       )}
 
-      {/* Role-specific overview content */}
       {profile.role === "admin" && <AdminOverview stats={stats} loading={loadingStats} />}
       {profile.role === "student" && <StudentOverview stats={stats} loading={loadingStats} />}
       {profile.role === "department_head" && (
@@ -417,7 +449,6 @@ function StudentOverview({ stats, loading }: { stats: Record<string, number | st
   );
 }
 
-
 function DeptHeadOverview({
   stats,
   loading,
@@ -464,7 +495,7 @@ function DeptHeadOverview({
             : "There is no open evaluation period."}
         </p>
         <p className="mt-2 text-xs text-slate-500">
-          Closed-period results: {stats.evaluations ?? 0} submitted response{Number(stats.evaluations ?? 0) === 1 ? "" : "s"} across {stats.closedPeriods ?? 0} closed period{Number(stats.closedPeriods ?? 0) === 1 ? "" : "s"}.
+          Closed-period results: {stats.evaluations ?? 0} submitted response{Number(stats.evaluations ?? 0) === 1 ? "" : "s"} across {stats.closedPeriods ?? 0} closed period{Number(stats.closedPeriods) === 1 ? "" : "s"}.
         </p>
         <div className="mt-4 flex flex-wrap gap-2">
           {detailed ? (

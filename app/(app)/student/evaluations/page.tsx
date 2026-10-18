@@ -14,7 +14,6 @@ import { collection, getDocs, query, where } from "firebase/firestore";
 import { db, firebaseReady } from "@/lib/firebase/client";
 import { useAuth } from "@/lib/firebase/auth-context";
 import { PageHeader } from "@/components/data-table";
-import { EvaluationSelection } from "@/components/student/evaluation-selection";
 import { evaluationQueueHref, MAX_EVALUATIONS_PER_SESSION } from "@/lib/evaluation-queue";
 import type {
   Department,
@@ -26,6 +25,7 @@ import type {
 } from "@/lib/types";
 import { fmtDateTime } from "@/lib/utils-extras";
 import { effectivePeriodStatus, remainingTimeLabel } from "@/lib/periods";
+import { cn } from "@/lib/utils";
 import toast from "react-hot-toast";
 
 export default function StudentEvaluationsPage() {
@@ -39,6 +39,7 @@ export default function StudentEvaluationsPage() {
   const [periods, setPeriods] = React.useState<Record<string, EvaluationPeriod>>({});
   const [search, setSearch] = React.useState("");
   const [loading, setLoading] = React.useState(true);
+  const [selectedIds, setSelectedIds] = React.useState<string[]>([]);
 
   React.useEffect(() => {
     if (!user || !firebaseReady) return;
@@ -143,16 +144,24 @@ export default function StudentEvaluationsPage() {
     ? "No completed evaluations match this search."
     : "You have not completed an evaluation yet.";
 
-  const startSelected = (queue: string[]) => {
-    const eligibleIds = new Set(availableAssignments
-      .filter((assignment) => effectivePeriodStatus(periods[assignment.periodId]) === "open")
-      .map((assignment) => assignment.id));
-    if (queue.length < 1 || queue.length > MAX_EVALUATIONS_PER_SESSION
-      || queue.some((id) => !eligibleIds.has(id))) {
-      toast.error("Choose between 1 and 5 available evaluations.");
+  const toggleSelect = (id: string) => {
+    if (selectedIds.includes(id)) {
+      setSelectedIds(selectedIds.filter((item) => item !== id));
+    } else {
+      if (selectedIds.length >= MAX_EVALUATIONS_PER_SESSION) {
+        toast.error(`You can select a maximum of ${MAX_EVALUATIONS_PER_SESSION} evaluations at a time.`);
+        return;
+      }
+      setSelectedIds([...selectedIds, id]);
+    }
+  };
+
+  const startSelected = () => {
+    if (selectedIds.length < 1 || selectedIds.length > MAX_EVALUATIONS_PER_SESSION) {
+      toast.error(`Choose between 1 and ${MAX_EVALUATIONS_PER_SESSION} available evaluations.`);
       return;
     }
-    router.push(evaluationQueueHref(queue));
+    router.push(evaluationQueueHref(selectedIds));
   };
 
   return (
@@ -169,13 +178,74 @@ export default function StudentEvaluationsPage() {
       ) : (
         <div className="space-y-7">
           {availableAssignments.length > 0 ? (
-            <EvaluationSelection
-              assignments={availableAssignments}
-              teachers={teachers}
-              subjects={subjects}
-              periods={periods}
-              onStart={startSelected}
-            />
+            <div className="rounded-2xl border border-slate-200/80 bg-white p-6 shadow-sm dark:border-slate-800/80 dark:bg-slate-900 space-y-4">
+              <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-center">
+                <div>
+                  <h2 className="text-lg font-bold text-slate-900 dark:text-white">Assigned Teachers for Evaluation</h2>
+                  <p className="text-sm text-slate-500">Select one or multiple assigned teachers to evaluate in this session.</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={startSelected}
+                  disabled={selectedIds.length === 0}
+                  className="btn-primary py-2.5 px-5 disabled:opacity-50"
+                >
+                  Start Selected ({selectedIds.length})
+                </button>
+              </div>
+
+              <div className="space-y-2">
+                {availableAssignments.map((assignment) => {
+                  const teacher = teachers[assignment.teacherId];
+                  const subject = subjects[assignment.subjectId];
+                  const department = departments[assignment.departmentId];
+                  const period = periods[assignment.periodId];
+                  const isSelected = selectedIds.includes(assignment.id);
+
+                  return (
+                    <div
+                      key={assignment.id}
+                      onClick={() => toggleSelect(assignment.id)}
+                      className={cn(
+                        "flex cursor-pointer items-center gap-4 rounded-xl border p-4 transition-all",
+                        isSelected
+                          ? "border-brand-600 bg-brand-50/50 dark:border-brand-500 dark:bg-brand-500/10"
+                          : "border-slate-200 bg-white hover:border-slate-300 dark:border-slate-800 dark:bg-slate-900 dark:hover:border-slate-700"
+                      )}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={isSelected}
+                        onChange={() => {}}
+                        aria-label={`Select ${teacher?.displayName ?? "teacher"} for evaluation`}
+                        className="h-4 w-4 rounded border-slate-300 text-brand-600 focus:ring-brand-500"
+                      />
+                      <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-slate-900 text-white dark:bg-white dark:text-slate-900">
+                        <Star className="h-4 w-4" />
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <p className="font-semibold text-slate-950 dark:text-white">
+                          {teacher?.displayName ?? "Teacher"}
+                        </p>
+                        <p className="mt-0.5 text-sm text-slate-600 dark:text-slate-400">
+                          {subject?.name ?? "Subject"}
+                        </p>
+                        <p className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-500">
+                          <span className="inline-flex items-center gap-1">
+                            <Building2 className="h-3.5 w-3.5" />
+                            {department?.name ?? "Department"}
+                          </span>
+                          <span>{period?.name ?? "Evaluation period"}</span>
+                        </p>
+                      </div>
+                      <span className="text-sm font-semibold text-brand-700 dark:text-brand-300">
+                        {statusLabel(period)}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
           ) : <EmptyState message={pendingEmptyMessage} />}
 
           <div className="relative">
@@ -240,6 +310,14 @@ export default function StudentEvaluationsPage() {
       )}
     </div>
   );
+}
+
+function statusLabel(period?: EvaluationPeriod) {
+  if (!period) return "Not open";
+  const st = effectivePeriodStatus(period);
+  if (st === "open") return "Open";
+  if (st === "closed") return "Closed";
+  return "Not yet open";
 }
 
 function EvaluationRow({

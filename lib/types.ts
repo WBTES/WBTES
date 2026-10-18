@@ -17,6 +17,8 @@ export interface AppUser {
   // Student-specific
   studentNumber?: string;
   studentNumberNormalized?: string;
+  studentRegistryId?: string;
+  studentLogin?: "school_id";
   programId?: string | null;
   // Legacy display value retained while existing profiles are migrated.
   course?: string;

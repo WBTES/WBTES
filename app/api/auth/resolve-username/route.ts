@@ -22,7 +22,8 @@ export async function GET(request: Request) {
       .where("usernameNormalized", "==", username)
       .limit(1)
       .get();
-    if (snapshot.empty || snapshot.docs[0].data().status === "disabled") {
+    if (snapshot.empty || snapshot.docs[0].data().status === "disabled"
+      || snapshot.docs[0].data().role === "student") {
       throw new ApiError(404, "Username was not found.");
     }
     return NextResponse.json({

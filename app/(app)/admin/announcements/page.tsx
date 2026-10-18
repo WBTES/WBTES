@@ -19,11 +19,11 @@ type PublishChoice = "draft" | "published" | "scheduled";
 type Priority = "normal" | "important" | "urgent";
 
 const AUDIENCES: { value: "all" | UserRole; label: string }[] = [
-  { value: "all", label: "Everyone" },
-  { value: "student", label: "Students" },
-  { value: "hr", label: "HR" },
-  { value: "department_head", label: "Department Head" },
-  { value: "admin", label: "Administrators" },
+  { value: "all", label: "Everyone (Students, HR, Dept Heads, Admins)" },
+  { value: "student", label: "Students Only" },
+  { value: "hr", label: "HR Only" },
+  { value: "department_head", label: "Department Heads Only" },
+  { value: "admin", label: "Administrators Only" },
 ];
 
 const EMPTY_FORM = {
@@ -55,8 +55,54 @@ function unique(values: Array<string | undefined>) {
   return [...new Set(values.filter((value): value is string => Boolean(value?.trim())))].sort();
 }
 
+// Automated helper to publish announcements when evaluation periods change status
+export async function autoTriggerEvaluationAnnouncement({
+  periodName,
+  status,
+  startDate,
+  endDate,
+}: {
+  periodName: string;
+  status: "open" | "closed";
+  startDate?: number;
+  endDate?: number;
+}) {
+  const now = Date.now();
+  const isOpen = status === "open";
+
+  const title = isOpen 
+    ? `📢 New Evaluation Period Open: ${periodName}` 
+    : `🔒 Evaluation Period Closed: ${periodName}`;
+
+  const body = isOpen
+    ? `The evaluation period "${periodName}" is now open${startDate && endDate ? ` from ${new Date(startDate).toLocaleDateString()} to${new Date(endDate).toLocaleDateString()}` : ""}. Please complete your assigned teacher evaluations on time.`
+    : `The evaluation period "${periodName}" has now officially closed. Thank you to everyone who participated.`;
+
+  try {
+    await addDoc(collection(db, "announcements"), {
+      title,
+      body,
+      audience: "all",
+      priority: isOpen ? "urgent" : "normal",
+      status: "published",
+      publishAt: now,
+      expiresAt: endDate ? endDate + 86400000 : null,
+      pinned: isOpen,
+      target: null,
+      actionLabel: isOpen ? "Start evaluations" : "View history",
+      actionLink: isOpen ? "/student/evaluations" : "/student/history",
+      sendEmail: isOpen,
+      createdBy: "system-automation",
+      createdAt: now,
+      updatedAt: now,
+    });
+  } catch (error) {
+    console.error("Failed to automatically post evaluation announcement:", error);
+  }
+}
+
 export default function AdminAnnouncementsPage() {
-  const { user } = useAuth();
+  const { user, profile } = useAuth();
   const { programs } = usePrograms();
   const [announcements, setAnnouncements] = React.useState<Announcement[]>([]);
   const [students, setStudents] = React.useState<AppUser[]>([]);
@@ -67,11 +113,17 @@ export default function AdminAnnouncementsPage() {
   const [loading, setLoading] = React.useState(false);
   const [testingEmail, setTestingEmail] = React.useState(false);
 
+  // Check role visibility eligibility (Admins, HR, and Department Heads can access management)
+  const canManageAnnouncements = profile?.role === "admin" || profile?.role === "hr" || profile?.role === "department_head";
+
   React.useEffect(() => {
     if (!firebaseReady) return;
     const unsubAnnouncements = onSnapshot(
       query(collection(db, "announcements"), orderBy("createdAt", "desc")),
-      (snap) => setAnnouncements(snap.docs.map((item) => ({ id: item.id, ...(item.data() as Omit<Announcement, "id">) })))
+      (snap) => {
+        const rows = snap.docs.map((item) => ({ id: item.id, ...(item.data() as Omit<Announcement, "id">) }));
+        setAnnouncements(rows);
+      }
     );
     const unsubStudents = onSnapshot(
       query(collection(db, "users"), where("role", "==", "student")),
@@ -275,11 +327,20 @@ export default function AdminAnnouncementsPage() {
     }
   };
 
+  if (!canManageAnnouncements) {
+    return (
+      <div className="rounded-2xl border border-rose-200 bg-rose-50 p-6 text-rose-700 dark:border-rose-500/20 dark:bg-rose-500/10 dark:text-rose-200">
+        <p className="font-semibold">Access restricted</p>
+        <p className="mt-1 text-sm">Only Administrators, HR, and Department Heads can manage announcements.</p>
+      </div>
+    );
+  }
+
   return (
     <div>
       <PageHeader
-        title="Announcements"
-        description="Publish targeted notices and evaluation reminders."
+        title="Announcements & Evaluation Notices"
+        description="Publish and manage manual campus announcements visible across Students, HR, and Department Heads."
         action={
           <div className="flex flex-wrap gap-2">
             <button onClick={sendTestEmail} disabled={testingEmail} className="btn-secondary">

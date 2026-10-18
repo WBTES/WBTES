@@ -141,12 +141,18 @@ function AssignmentEvaluation({ assignmentId }: { assignmentId: string }) {
       return;
     }
 
-    // Validate required
+    // Validate required questions
     for (const q of questions) {
       if (q.required && (answers[q.id] === undefined || answers[q.id] === "")) {
         toast.error(`Please answer: ${q.text}`);
         return;
       }
+    }
+
+    // Validate required comments
+    if (!comment.trim()) {
+      toast.error("Please provide additional comments before submitting.");
+      return;
     }
 
     submitInProgress.current = true;
@@ -325,14 +331,23 @@ function AssignmentEvaluation({ assignmentId }: { assignmentId: string }) {
         ))}
 
         <div className="rounded-2xl border border-slate-200/80 bg-white p-5 shadow-sm dark:border-slate-800/80 dark:bg-slate-900">
-          <p className="text-sm font-semibold text-slate-900 dark:text-white">Additional comments <span className="text-xs font-normal text-slate-500 dark:text-slate-400">(optional)</span></p>
+          <p className="text-sm font-semibold text-slate-900 dark:text-white">
+            Additional comments <span className="text-xs font-normal text-rose-500">*</span>
+          </p>
           <textarea
             rows={4}
             value={comment}
             onChange={(e) => setComment(e.target.value)}
-            placeholder="Share specific feedback that helps this teacher improve..."
+            placeholder="Share specific feedback that helps this teacher improve (Required)..."
             className="mt-3 w-full rounded-xl border border-slate-200/80 bg-white px-3.5 py-2.5 text-sm outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-500/20 dark:border-slate-800/80 dark:bg-slate-900 dark:text-white"
           />
+          
+          {/* Notice specifically stating test your written comments are strictly confidential and anonymized */}
+          <div className="mt-4 rounded-xl border border-rose-300 bg-rose-50 p-3.5 text-xs text-rose-700 shadow-sm dark:border-rose-900/50 dark:bg-rose-950/30 dark:text-rose-400">
+            <p className="font-normal leading-relaxed">
+              Your written comments are strictly confidential and anonymized.
+            </p>
+          </div>
         </div>
 
         <button type="submit" disabled={submitting} className="btn-primary w-full py-3 text-base">

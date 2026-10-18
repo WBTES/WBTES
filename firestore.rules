@@ -20,6 +20,8 @@ service cloud.firestore {
 
     function active() {
       return hasProfile()
+        && (profile().role != 'student'
+          || request.auth.token.get('firebase', {}).get('sign_in_provider', 'custom') in ['password', 'custom'])
         && (!(profile().role in ['hr', 'department_head'])
           || request.auth.token.email_verified == true)
         && profile().get('status', 'active') == 'active';

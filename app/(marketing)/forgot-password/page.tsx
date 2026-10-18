@@ -13,6 +13,10 @@ export default function ForgotPasswordPage() {
   const [email, setEmail] = React.useState("");
   const [loading, setLoading] = React.useState(false);
   const [done, setDone] = React.useState(false);
+  const [studentRecovery, setStudentRecovery] = React.useState(false);
+  React.useEffect(() => {
+    setStudentRecovery(new URLSearchParams(window.location.search).get("role") === "student");
+  }, []);
 
   const onSubmit = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -44,7 +48,15 @@ export default function ForgotPasswordPage() {
 
         <main className="flex items-center justify-center py-6 lg:py-10">
           <section className="w-full max-w-md rounded-lg border border-slate-200 bg-white p-6 shadow-sm sm:p-8 dark:border-slate-800 dark:bg-slate-900">
-            {done ? (
+            {studentRecovery ? (
+              <div>
+                <h1 className="text-2xl font-bold text-slate-950 dark:text-white">Student account recovery</h1>
+                <p className="mt-3 text-sm leading-relaxed text-slate-600 dark:text-slate-400">
+                  Contact an administrator with your School ID to reset your password. Shared contact emails cannot identify an individual student account.
+                </p>
+                <Link href="/login" className="btn-primary mt-6 w-full py-3 text-sm">Back to sign in</Link>
+              </div>
+            ) : done ? (
               <div className="text-center">
                 <span className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-emerald-100 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300">
                   <CheckCircle2 className="h-6 w-6" />

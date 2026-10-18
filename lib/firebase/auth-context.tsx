@@ -2,11 +2,9 @@
 
 import * as React from "react";
 import {
-  GoogleAuthProvider,
   onAuthStateChanged,
   signInWithEmailAndPassword,
   signInWithCustomToken,
-  signInWithPopup,
   signOut as firebaseSignOut,
   type User as FirebaseUser,
 } from "firebase/auth";
@@ -19,8 +17,7 @@ type AuthContextValue = {
   profile: AppUser | null;
   loading: boolean;
   configured: boolean;
-  signIn: (identifier: string, password: string) => Promise<void>;
-  signInWithGoogle: () => Promise<void>;
+  signIn: (identifier: string, password: string, kind?: "student" | "staff") => Promise<void>;
   completeStudentRegistration: (customToken: string) => Promise<void>;
   signOut: () => Promise<void>;
   resetPassword: (email: string) => Promise<void>;
@@ -124,35 +121,27 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const signIn = React.useCallback(async (
     identifier: string,
-    password: string
+    password: string,
+    kind: "student" | "staff" = "staff"
   ) => {
     interactiveAuth.current = true;
     try {
-      const email = await resolveLoginIdentifier(identifier);
-      const credential = await signInWithEmailAndPassword(auth, email, password);
+      let credential;
+      if (kind === "student") {
+        const response = await fetch("/api/auth/resolve-student", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ schoolId: identifier.trim(), password }),
+        });
+        const data = await response.json() as { customToken?: string; error?: string };
+        if (!response.ok || !data.customToken) throw new Error(data.error ?? "Student sign-in failed.");
+        credential = await signInWithCustomToken(auth, data.customToken);
+      } else {
+        const email = await resolveLoginIdentifier(identifier);
+        credential = await signInWithEmailAndPassword(auth, email, password);
+      }
       await verifyServerSession(credential.user, {
         method: "password",
-        mode: "login",
-        eventId: crypto.randomUUID(),
-      });
-    } catch (error) {
-      await firebaseSignOut(auth);
-      setUser(null);
-      setProfile(null);
-      throw error;
-    } finally {
-      interactiveAuth.current = false;
-    }
-  }, [verifyServerSession]);
-
-  const signInWithGoogle = React.useCallback(async () => {
-    interactiveAuth.current = true;
-    const provider = new GoogleAuthProvider();
-    provider.setCustomParameters({ prompt: "select_account" });
-    try {
-      const credential = await signInWithPopup(auth, provider);
-      await verifyServerSession(credential.user, {
-        method: "google",
         mode: "login",
         eventId: crypto.randomUUID(),
       });
@@ -231,7 +220,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         loading,
         configured: firebaseReady,
         signIn,
-        signInWithGoogle,
         completeStudentRegistration,
         signOut,
         resetPassword,

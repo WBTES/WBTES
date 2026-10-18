@@ -1,7 +1,10 @@
-import "server-only";
+"server-only";
 
 import nodemailer from "nodemailer";
 
+// ==========================================
+// 1. TYPES & CUSTOM ERRORS
+// ==========================================
 export type EmailMessage = {
   to: string;
   subject: string;
@@ -16,6 +19,9 @@ export class SmtpSendingLimitError extends Error {
   }
 }
 
+// ==========================================
+// 2. SMTP CONFIGURATION HELPER
+// ==========================================
 function smtpConfig() {
   const host = process.env.SMTP_HOST?.trim() ?? "";
   const port = Number(process.env.SMTP_PORT ?? "587");
@@ -34,10 +40,9 @@ export function isSmtpConfigured() {
   return smtpConfig().configured;
 }
 
-export async function sendSmtpEmail(message: EmailMessage) {
-  return sendSmtpEmails([message]);
-}
-
+// ==========================================
+// 3. CORE SENDING LOGIC (BATCHED)
+// ==========================================
 export async function sendSmtpEmails(messages: EmailMessage[]) {
   const config = smtpConfig();
   if (!config.configured) {
@@ -62,27 +67,72 @@ export async function sendSmtpEmails(messages: EmailMessage[]) {
   try {
     for (let i = 0; i < valid.length; i += 20) {
       const results = await Promise.allSettled(
-        valid.slice(i, i + 20).map((message) => transporter.sendMail({
-          from: { name: config.fromName, address: config.fromEmail },
-          to: message.to,
-          replyTo: message.replyTo,
-          subject: message.subject,
-          text: message.text,
-        }))
+        valid.slice(i, i + 20).map((message) =>
+          transporter.sendMail({
+            from: { name: config.fromName, address: config.fromEmail },
+            to: message.to,
+            replyTo: message.replyTo,
+            subject: message.subject,
+            text: message.text,
+          })
+        )
       );
       const failures = results.filter((result): result is PromiseRejectedResult => result.status === "rejected");
       sent += results.length - failures.length;
       failed += failures.length;
-      if (failures.some((failure) => {
-        const response = (failure.reason as { response?: unknown } | null)?.response;
-        return typeof response === "string" && /daily user sending limit exceeded/i.test(response);
-      })) {
+      
+      if (
+        failures.some((failure) => {
+          const response = (failure.reason as { response?: unknown } | null)?.response;
+          return typeof response === "string" && /daily user sending limit exceeded/i.test(response);
+        })
+      ) {
         throw new SmtpSendingLimitError();
       }
     }
   } finally {
     transporter.close();
   }
-  if (failed > 0) throw new Error(`${failed} email message${failed === 1 ? " was" : "s were"} rejected by the SMTP server.`);
+
+  if (failed > 0) {
+    throw new Error(`${failed} email message${failed === 1 ? " was" : "s were"} rejected by the SMTP server.`);
+  }
   return { sent, failed };
+}
+
+// ==========================================
+// 4. ALL-IN-ONE ANNOUNCEMENT HELPER
+// ==========================================
+/**
+ * Call this single function to broadcast an announcement to a list of email addresses.
+ */
+export async function sendAnnouncementBroadcast({
+  recipients,
+  subject,
+  messageText,
+}: {
+  recipients: string[];
+  subject: string;
+  messageText: string;
+}) {
+  if (!isSmtpConfigured()) {
+    throw new Error("SMTP is not configured in environment variables.");
+  }
+
+  const cleanRecipients = recipients
+    .map((email) => email.trim())
+    .filter((email) => email.includes("@"));
+
+  if (cleanRecipients.length === 0) {
+    throw new Error("No valid recipient email addresses provided.");
+  }
+
+  const emailMessages: EmailMessage[] = cleanRecipients.map((to) => ({
+    to,
+    subject,
+    text: messageText,
+  }));
+
+  const result = await sendSmtpEmails(emailMessages);
+  return result;
 }

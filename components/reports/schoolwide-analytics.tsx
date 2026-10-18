@@ -43,8 +43,15 @@ export function SchoolwideAnalytics() {
     setExporting(true);
     try {
       const { exportParticipationReport } = await import("@/lib/reports");
-      exportParticipationReport(kind, result.data.participation, result.periods.find((period) => period.id === periodId)?.name ?? "All evaluation periods", result.lookups);
-      toast.success("Participation report downloaded");
+      
+      exportParticipationReport(
+        kind, 
+        result.data.participation, 
+        result.periods.find((period) => period.id === periodId)?.name ?? "All evaluation periods", 
+        result.lookups
+      );
+      
+      toast.success(`Participation report with teacher ratings downloaded as ${kind.toUpperCase()}`);
     } catch (cause) {
       toast.error(cause instanceof Error ? cause.message : "Participation report could not be exported.");
     } finally {
@@ -52,31 +59,81 @@ export function SchoolwideAnalytics() {
     }
   };
 
-  return <section className="my-6 min-w-0 space-y-4" aria-label="School-wide analytics" aria-busy={loading}>
-    <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-      <div className="min-w-0"><h2 className="text-base font-semibold">School-wide analytics</h2><p className="mt-1 text-xs text-slate-500 dark:text-slate-400">Live participation; ratings from completed assignments{profile?.role !== "admin" ? " in closed periods" : ""}{profile?.role === "department_head" ? " with at least 5 responses per result" : ""}.</p></div>
-      <div className="flex flex-wrap items-center gap-2">
-        <select aria-label="Analytics period" value={periodId} onChange={(event) => setPeriodId(event.target.value)} className={`${inputCls} sm:w-60`}>
-          <option value="">All evaluation periods</option>
-          {result?.periods.map((period) => <option key={period.id} value={period.id}>{period.name}</option>)}
-        </select>
-        <button type="button" disabled={loading} onClick={() => setRefresh((value) => value + 1)} className="btn-secondary shrink-0" aria-label="Refresh analytics" title="Refresh analytics"><RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} /></button>
-        <button type="button" disabled={loading || exporting || !result?.data.participation.length || Boolean(error)} onClick={() => void downloadParticipation("pdf")} className="btn-secondary" title="Download teacher participation without waiting for final ratings"><Download className="h-4 w-4" /> Progress PDF</button>
-        <button type="button" disabled={loading || exporting || !result?.data.participation.length || Boolean(error)} onClick={() => void downloadParticipation("excel")} className="btn-secondary" title="Export teacher participation without waiting for final ratings"><FileSpreadsheet className="h-4 w-4" /> Progress Excel</button>
+  return (
+    <section className="my-6 min-w-0 space-y-4" aria-label="School-wide analytics" aria-busy={loading}>
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div className="min-w-0">
+          <h2 className="text-base font-semibold">School-wide analytics</h2>
+          <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+            Live participation; ratings from completed assignments{profile?.role !== "admin" ? " in closed periods" : ""}{profile?.role === "department_head" ? " with at least 5 responses per result" : ""}.
+          </p>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <select 
+            aria-label="Analytics period" 
+            value={periodId} 
+            onChange={(event) => setPeriodId(event.target.value)} 
+            className={`${inputCls} sm:w-60`}
+          >
+            <option value="">All evaluation periods</option>
+            {result?.periods.map((period) => <option key={period.id} value={period.id}>{period.name}</option>)}
+          </select>
+          <button 
+            type="button" 
+            disabled={loading} 
+            onClick={() => setRefresh((value) => value + 1)} 
+            className="btn-secondary shrink-0" 
+            aria-label="Refresh analytics" 
+            title="Refresh analytics"
+          >
+            <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />
+          </button>
+          <button 
+            type="button" 
+            disabled={loading || exporting || !result?.data.participation.length || Boolean(error)} 
+            onClick={() => void downloadParticipation("pdf")} 
+            className="btn-secondary" 
+            title="Download teacher participation with partial ratings as PDF"
+          >
+            <Download className="h-4 w-4" /> Progress PDF
+          </button>
+          <button 
+            type="button" 
+            disabled={loading || exporting || !result?.data.participation.length || Boolean(error)} 
+            onClick={() => void downloadParticipation("excel")} 
+            className="btn-secondary" 
+            title="Export teacher participation with partial ratings as Excel"
+          >
+            <FileSpreadsheet className="h-4 w-4" /> Progress Excel
+          </button>
+        </div>
       </div>
-    </div>
-    {loading && result && <p role="status" className="text-xs text-slate-500 dark:text-slate-400">Updating charts...</p>}
-    {error ? <p role="alert" className="rounded-lg border border-rose-200 bg-rose-50 p-4 text-sm text-rose-800 dark:border-rose-900 dark:bg-rose-950/30 dark:text-rose-200">{error}</p> : result ? <>
-      <div className="grid gap-3 sm:grid-cols-3">
-        <Summary label="Responses received" value={result.data.totalEvaluations} />
-        <Summary label="Completed evaluation tasks" value={result.data.completionByDepartment.reduce((sum, item) => sum + item.completed, 0)} />
-        <Summary label="Pending evaluation tasks" value={result.data.completionByDepartment.reduce((sum, item) => sum + item.pending, 0)} />
-      </div>
-      <EvaluationAnalyticsCharts data={result.data} showPreliminary={profile?.role === "admin"} />
-    </> : <div className="h-64 animate-pulse rounded-lg bg-slate-200 dark:bg-slate-800" aria-label="Loading analytics" />}
-  </section>;
+      {loading && result && <p role="status" className="text-xs text-slate-500 dark:text-slate-400">Updating charts...</p>}
+      {error ? (
+        <p role="alert" className="rounded-lg border border-rose-200 bg-rose-50 p-4 text-sm text-rose-800 dark:border-rose-900 dark:bg-rose-950/30 dark:text-rose-200">
+          {error}
+        </p>
+      ) : result ? (
+        <>
+          <div className="grid gap-3 sm:grid-cols-3">
+            <Summary label="Responses received" value={result.data.totalEvaluations} />
+            <Summary label="Completed evaluation tasks" value={result.data.completionByDepartment.reduce((sum, item) => sum + item.completed, 0)} />
+            <Summary label="Pending evaluation tasks" value={result.data.completionByDepartment.reduce((sum, item) => sum + item.pending, 0)} />
+          </div>
+          <EvaluationAnalyticsCharts data={result.data} showPreliminary={profile?.role === "admin"} />
+        </>
+      ) : (
+        <div className="h-64 animate-pulse rounded-lg bg-slate-200 dark:bg-slate-800" aria-label="Loading analytics" />
+      )}
+    </section>
+  );
 }
 
 function Summary({ label, value }: { label: string; value: number }) {
-  return <div className="rounded-lg border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900"><p className="text-xs text-slate-500 dark:text-slate-400">{label}</p><p className="mt-2 text-2xl font-bold tabular-nums">{value}</p></div>;
+  return (
+    <div className="rounded-lg border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900">
+      <p className="text-xs text-slate-500 dark:text-slate-400">{label}</p>
+      <p className="mt-2 text-2xl font-bold tabular-nums">{value}</p>
+    </div>
+  );
 }

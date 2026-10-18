@@ -4,12 +4,13 @@ import { adminAuth, adminDb } from "@/lib/firebase/admin";
 import {
   apiErrorResponse,
   asString,
-  emailDocumentId,
   optionalString,
 } from "@/lib/server/api-response";
 import { writeAuditLog } from "@/lib/server/audit";
 import { synchronizeStudentAssignments } from "@/lib/server/assignment-sync";
 import { ApiError, requireAdmin } from "@/lib/server/require-admin";
+import { claimStudentIdentities } from "@/lib/server/student-identities";
+import { findStudentRegistryReference } from "@/lib/server/student-registry";
 import {
   assertStudentNumberAvailable,
   type StudentRegistrationInput,
@@ -88,8 +89,8 @@ export async function PATCH(request: Request) {
 
     const registration = await validateStudentRegistration({
       ...body,
-      email: existingData.email,
-    });
+      email: body.email ?? existingData.email,
+    }, { requireStudentNumber: Boolean(existingData.studentNumber) });
     if (registration.studentNumber) {
       await assertStudentNumberAvailable(registration.studentNumber, id);
     }
@@ -102,21 +103,22 @@ export async function PATCH(request: Request) {
     }
 
     const now = Date.now();
-    const batch = adminDb.batch();
-    batch.update(existingRef, {
-      ...registration,
-      status,
-      updatedAt: now,
-    });
-    if (claimedUid) {
-      batch.set(adminDb.collection("users").doc(claimedUid), {
+    await adminDb.runTransaction(async (transaction) => {
+      await claimStudentIdentities(transaction, registration, id, claimedUid, true);
+      transaction.update(existingRef, {
         ...registration,
-        role: "student",
         status,
         updatedAt: now,
-      }, { merge: true });
-    }
-    await batch.commit();
+      });
+      if (claimedUid) {
+        transaction.set(adminDb.collection("users").doc(claimedUid), {
+          ...registration,
+          role: "student",
+          status,
+          updatedAt: now,
+        }, { merge: true });
+      }
+    });
 
     if (claimedUid) {
       await adminAuth.updateUser(claimedUid, {
@@ -179,6 +181,11 @@ export async function DELETE(request: Request) {
     }
     const claimedUid = optionalString(registry.data()?.claimedUid, 200);
     const email = String(registry.data()?.email ?? "");
+    await adminDb.runTransaction(async (transaction) => {
+      await claimStudentIdentities(transaction, {
+        email, studentNumber: String(registry.data()?.studentNumber ?? ""),
+      }, id, claimedUid, true);
+    });
 
     if (claimedUid) {
       try {
@@ -252,14 +259,22 @@ async function migrateLegacyStudents() {
     .where("role", "==", "student")
     .get();
   const writer = adminDb.bulkWriter();
+  const writes: Promise<unknown>[] = [];
   for (const student of students.docs) {
     const data = student.data();
     if (!data.email || !data.programId || !data.departmentId) continue;
     const email = String(data.email).trim().toLowerCase();
-    const reference = adminDb
-      .collection("studentRegistry")
-      .doc(emailDocumentId(email));
-    writer.set(reference, {
+    const reference = await findStudentRegistryReference(student.id, {
+      email,
+      studentNumber: String(data.studentNumber ?? ""),
+      studentRegistryId: data.studentRegistryId,
+      studentLogin: data.studentLogin,
+    });
+    const existing = await reference.get();
+    if (existing.exists && existing.data()?.claimedUid && existing.data()?.claimedUid !== student.id) {
+      throw new ApiError(409, "This student record is linked to another account.");
+    }
+    if (!existing.exists) writes.push(writer.set(reference, {
       email,
       emailNormalized: email,
       displayName: String(data.displayName ?? email),
@@ -274,7 +289,13 @@ async function migrateLegacyStudents() {
       claimedUid: student.id,
       createdAt: Number(data.createdAt ?? Date.now()),
       updatedAt: Date.now(),
-    }, { merge: true });
+    }, { merge: true }));
+    else if (!existing.data()?.claimedUid) writes.push(writer.set(reference, {
+      claimedUid: student.id,
+    }, { merge: true }));
+    if (!data.studentRegistryId) writes.push(writer.set(student.ref, {
+      studentRegistryId: reference.id,
+    }, { merge: true }));
   }
-  await writer.close();
+  await Promise.all([...writes, writer.close()]);
 }

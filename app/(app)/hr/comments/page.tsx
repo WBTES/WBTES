@@ -11,7 +11,6 @@ import {
   Search,
   ShieldCheck,
   Sparkles,
-  Users,
 } from "lucide-react";
 import { collection, getDocs, query, where } from "firebase/firestore";
 import { db, firebaseReady } from "@/lib/firebase/client";
@@ -134,10 +133,6 @@ export default function HrCommentsPage() {
     );
   }, [consolidated.uniqueComments, filter.search, matchingEvaluations, periodNames, subjectNames, teacherNames]);
 
-  const representedTeachers = new Set(
-    matchingEvaluations.map((evaluation) => evaluation.teacherId)
-  ).size;
-
   return (
     <div>
       <PageHeader
@@ -183,10 +178,9 @@ export default function HrCommentsPage() {
             </div>
           </div>
 
-          <div className="grid gap-3 sm:grid-cols-3">
+          <div className="grid gap-3 sm:grid-cols-2">
             <SummaryCard icon={MessageSquareText} label="Unique comments" value={consolidated.analysis.uniqueComments} />
             <SummaryCard icon={Sparkles} label="Detected themes" value={consolidated.analysis.themes.length} />
-            <SummaryCard icon={Users} label="Teachers represented" value={representedTeachers} />
           </div>
 
           <div className="rounded-lg border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900">
@@ -238,17 +232,6 @@ export default function HrCommentsPage() {
               </FormField>
             </div>
           </div>
-
-          {consolidated.analysis.themes.length > 0 && (
-            <div className="flex flex-wrap items-center gap-2">
-              <span className="text-xs font-semibold text-slate-500">Common themes:</span>
-              {consolidated.analysis.themes.slice(0, 8).map((theme) => (
-                <span key={theme.name} className="rounded-md border border-slate-200 bg-white px-2 py-1 text-xs dark:border-slate-700 dark:bg-slate-900">
-                  {theme.name} ({theme.count})
-                </span>
-              ))}
-            </div>
-          )}
 
           <section aria-labelledby="comment-list-title">
             <div className="mb-3 flex items-center justify-between gap-3">
@@ -315,8 +298,8 @@ function SummaryCard({
 function CommentsSkeleton() {
   return (
     <div className="space-y-5" aria-label="Loading anonymous comments">
-      <div className="grid gap-3 sm:grid-cols-3">
-        {Array.from({ length: 3 }).map((_, index) => (
+      <div className="grid gap-3 sm:grid-cols-2">
+        {Array.from({ length: 2 }).map((_, index) => (
           <div key={index} className="h-20 animate-pulse rounded-lg bg-slate-200 dark:bg-slate-800" />
         ))}
       </div>

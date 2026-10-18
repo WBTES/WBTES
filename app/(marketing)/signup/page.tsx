@@ -167,9 +167,10 @@ export default function SignupPage() {
                         />
                       </div>
                     </Field>
-                    <Field label="Student number" htmlFor="signup-student-number">
+                    <Field label="School ID" htmlFor="signup-student-number">
                       <input
                         id="signup-student-number"
+                        maxLength={100}
                         required
                         value={form.studentNumber}
                         onChange={(event) => setForm({
@@ -182,7 +183,7 @@ export default function SignupPage() {
                     </Field>
                   </div>
 
-                  <Field label="School email" htmlFor="signup-email">
+                  <Field label="Contact email" htmlFor="signup-email">
                     <div className="relative">
                       <Mail className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
                       <input

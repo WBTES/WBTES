@@ -2,480 +2,1044 @@
 
 import * as React from "react";
 import Link from "next/link";
-import { AlertCircle, CheckCircle2, Clock3, Eye, Pencil, Plus, UsersRound } from "lucide-react";
-import { addDoc, collection, deleteDoc, doc, getDocs, onSnapshot, orderBy, query, updateDoc, where, writeBatch } from "firebase/firestore";
+import { useRouter } from "next/navigation";
+import {
+  AlertCircle,
+  CheckCircle2,
+  Clock3,
+  BarChart3,
+  Pencil,
+  Plus,
+  UsersRound,
+} from "lucide-react";
+
+import {
+  addDoc,
+  collection,
+  deleteDoc,
+  doc,
+  getDocs,
+  onSnapshot,
+  orderBy,
+  query,
+  updateDoc,
+  where,
+  writeBatch,
+} from "firebase/firestore";
+
 import { db, firebaseReady } from "@/lib/firebase/client";
 import { usePrograms } from "@/lib/use-programs";
-import { authenticatedFetch, readApiResponse, recordActivity } from "@/lib/authenticated-fetch";
-import { PageHeader, Modal, FormField, inputCls } from "@/components/data-table";
-import type { AppUser, Subject, Department, EvaluationCompletion, EvaluationPeriod, TeacherAssignment, Teacher } from "@/lib/types";
+import {
+  authenticatedFetch,
+  readApiResponse,
+  recordActivity,
+} from "@/lib/authenticated-fetch";
+import {
+  PageHeader,
+  Modal,
+  FormField,
+  inputCls,
+} from "@/components/data-table";
+
+import type {
+  AppUser,
+  Subject,
+  Department,
+  EvaluationCompletion,
+  EvaluationPeriod,
+  TeacherAssignment,
+  Teacher,
+} from "@/lib/types";
+
 import toast from "react-hot-toast";
 import { fmtDateTime } from "@/lib/utils-extras";
 import { formatSubjectLabel } from "@/lib/utils";
 
+type Assignment = TeacherAssignment & {
+  targetStudentCount?: number;
+  studentIds: string[];
+};
+
+type AssignmentForm = {
+  teacherId: string;
+  subjectId: string;
+  periodId: string;
+  studentIds: string[];
+  expectedStudentCount: number;
+};
+
 export default function AdminAssignmentsPage() {
+  const router = useRouter();
   const { programs } = usePrograms();
-  const [assigns, setAssigns] = React.useState<TeacherAssignment[]>([]);
+
+  const [assigns, setAssigns] = React.useState<Assignment[]>([]);
   const [teachers, setTeachers] = React.useState<Teacher[]>([]);
   const [students, setStudents] = React.useState<AppUser[]>([]);
   const [subjects, setSubjects] = React.useState<Subject[]>([]);
   const [depts, setDepts] = React.useState<Department[]>([]);
   const [periods, setPeriods] = React.useState<EvaluationPeriod[]>([]);
+  const [completions, setCompletions] =
+    React.useState<EvaluationCompletion[]>([]);
+
   const [open, setOpen] = React.useState(false);
-  const [editingAssignment, setEditingAssignment] = React.useState<TeacherAssignment | null>(null);
-  const [progressAssignment, setProgressAssignment] = React.useState<TeacherAssignment | null>(null);
-  const [completedStudentIds, setCompletedStudentIds] = React.useState<Set<string>>(new Set());
-  const [completions, setCompletions] = React.useState<EvaluationCompletion[]>([]);
   const [bulkOpen, setBulkOpen] = React.useState(false);
-  const [form, setForm] = React.useState({
+  const [progressAssignment, setProgressAssignment] =
+    React.useState<Assignment | null>(null);
+  const [editingAssignment, setEditingAssignment] =
+    React.useState<Assignment | null>(null);
+
+  const [completedStudentIds, setCompletedStudentIds] =
+    React.useState<Set<string>>(new Set());
+
+  const [loading, setLoading] = React.useState(false);
+  const [bulkLoading, setBulkLoading] = React.useState(false);
+
+  const [form, setForm] = React.useState<AssignmentForm>({
     teacherId: "",
     subjectId: "",
     periodId: "",
-    studentIds: [] as string[],
+    studentIds: [],
+    expectedStudentCount: 1,
   });
-  const [loading, setLoading] = React.useState(false);
-  const [bulkLoading, setBulkLoading] = React.useState(false);
+
   const [bulkPeriodId, setBulkPeriodId] = React.useState("");
-  const [bulkTeacherIds, setBulkTeacherIds] = React.useState<Set<string>>(new Set());
-  const [bulkSubjectIds, setBulkSubjectIds] = React.useState<Record<string, string>>({});
-  const [completionCounts, setCompletionCounts] = React.useState<Record<string, number>>({});
+  const [bulkTeacherIds, setBulkTeacherIds] =
+    React.useState<Set<string>>(new Set());
+  const [bulkSubjectIds, setBulkSubjectIds] =
+    React.useState<Record<string, string>>({});
+  const [bulkExpectedCounts, setBulkExpectedCounts] =
+    React.useState<Record<string, number>>({});
+
+  /* ============================================================
+     REAL-TIME FIRESTORE LISTENERS
+  ============================================================ */
 
   React.useEffect(() => {
     if (!firebaseReady) return;
-    const unsubs: Array<() => void> = [];
-    unsubs.push(onSnapshot(query(collection(db, "teacherAssignments"), orderBy("createdAt", "desc")), (snap) => {
-      setAssigns(snap.docs.map((d) => ({ id: d.id, ...(d.data() as Omit<TeacherAssignment, "id">) })));
-    }));
-    unsubs.push(onSnapshot(query(collection(db, "teachers"), orderBy("displayName")), (snap) => {
-      setTeachers(snap.docs.map((d) => ({ id: d.id, ...(d.data() as Omit<Teacher, "id">) })));
-    }));
-    unsubs.push(onSnapshot(query(collection(db, "users"), where("role", "==", "student")), (snap) => {
-      setStudents(snap.docs.map((d) => ({ uid: d.id, ...(d.data() as Omit<AppUser, "uid">) })));
-    }));
-    unsubs.push(onSnapshot(collection(db, "subjects"), (snap) => {
-      setSubjects(snap.docs.map((d) => ({ id: d.id, ...(d.data() as Omit<Subject, "id">) })));
-    }));
-    unsubs.push(onSnapshot(collection(db, "departments"), (snap) => {
-      setDepts(snap.docs.map((d) => ({ id: d.id, ...(d.data() as Omit<Department, "id">) })));
-    }));
-    unsubs.push(onSnapshot(collection(db, "evaluationPeriods"), (snap) => {
-      setPeriods(snap.docs.map((d) => ({ id: d.id, ...(d.data() as Omit<EvaluationPeriod, "id">) })));
-    }));
-    unsubs.push(onSnapshot(collection(db, "evaluationCompletions"), (snap) => {
-      const rows = snap.docs.map((item) => ({
-        id: item.id,
-        ...(item.data() as Omit<EvaluationCompletion, "id">),
-      }));
-      const completedByAssignment: Record<string, Set<string>> = {};
-      const counts: Record<string, number> = {};
-      rows.forEach((completion) => {
-        if (!completion.assignmentId || !completion.studentId) return;
-        completedByAssignment[completion.assignmentId] ??= new Set<string>();
-        completedByAssignment[completion.assignmentId].add(completion.studentId);
-      });
-      Object.entries(completedByAssignment).forEach(([assignmentId, studentIds]) => {
-        counts[assignmentId] = studentIds.size;
-      });
-      setCompletions(rows);
-      setCompletionCounts(counts);
-    }));
-    return () => unsubs.forEach((u) => u());
+
+    const unsubscribers: Array<() => void> = [];
+
+    unsubscribers.push(
+      onSnapshot(
+        query(
+          collection(db, "teacherAssignments"),
+          orderBy("createdAt", "desc")
+        ),
+        (snapshot) => {
+          setAssigns(
+            snapshot.docs.map((item) => {
+              const data = item.data();
+
+              return {
+                ...data,
+                id: item.id,
+                studentIds: Array.isArray(data.studentIds)
+                  ? data.studentIds.map(String)
+                  : [],
+              } as Assignment;
+            })
+          );
+        },
+        (error) => {
+          console.error("Assignments listener failed:", error);
+          toast.error("Failed to load assignments.");
+        }
+      )
+    );
+
+    unsubscribers.push(
+      onSnapshot(
+        query(collection(db, "teachers"), orderBy("displayName")),
+        (snapshot) => {
+          setTeachers(
+            snapshot.docs.map((item) => ({
+              ...item.data(),
+              id: item.id,
+            })) as Teacher[]
+          );
+        },
+        (error) => {
+          console.error("Teachers listener failed:", error);
+          toast.error("Failed to load teachers.");
+        }
+      )
+    );
+
+    unsubscribers.push(
+      onSnapshot(
+        query(collection(db, "users"), where("role", "==", "student")),
+        (snapshot) => {
+          setStudents(
+            snapshot.docs.map((item) => ({
+              ...item.data(),
+              uid: item.id,
+            })) as AppUser[]
+          );
+        },
+        (error) => {
+          console.error("Students listener failed:", error);
+          toast.error("Failed to load students.");
+        }
+      )
+    );
+
+    unsubscribers.push(
+      onSnapshot(
+        collection(db, "subjects"),
+        (snapshot) => {
+          setSubjects(
+            snapshot.docs.map((item) => ({
+              ...item.data(),
+              id: item.id,
+            })) as Subject[]
+          );
+        },
+        (error) => {
+          console.error("Subjects listener failed:", error);
+        }
+      )
+    );
+
+    unsubscribers.push(
+      onSnapshot(
+        collection(db, "departments"),
+        (snapshot) => {
+          setDepts(
+            snapshot.docs.map((item) => ({
+              ...item.data(),
+              id: item.id,
+            })) as Department[]
+          );
+        },
+        (error) => {
+          console.error("Departments listener failed:", error);
+        }
+      )
+    );
+
+    unsubscribers.push(
+      onSnapshot(
+        collection(db, "evaluationPeriods"),
+        (snapshot) => {
+          setPeriods(
+            snapshot.docs.map((item) => ({
+              ...item.data(),
+              id: item.id,
+            })) as EvaluationPeriod[]
+          );
+        },
+        (error) => {
+          console.error("Periods listener failed:", error);
+        }
+      )
+    );
+
+    unsubscribers.push(
+      onSnapshot(
+        collection(db, "evaluationCompletions"),
+        (snapshot) => {
+          setCompletions(
+            snapshot.docs.map((item) => ({
+              ...item.data(),
+              id: item.id,
+            })) as EvaluationCompletion[]
+          );
+        },
+        (error) => {
+          console.error("Completion listener failed:", error);
+          toast.error("Failed to load evaluation completion records.");
+        }
+      )
+    );
+
+    return () => {
+      unsubscribers.forEach((unsubscribe) => unsubscribe());
+    };
   }, []);
 
-  const activeStudents = students.filter(
-    (student) => (student.status ?? "active") === "active"
-  );
-  const assignablePeriods = periods.filter((period) => period.status !== "closed");
-  const setupReady =
-    depts.length > 0
-    && programs.length > 0
-    && teachers.length > 0
-    && subjects.length > 0
-    && assignablePeriods.length > 0
-    && activeStudents.length > 0;
+  /* ============================================================
+     ACTIVE STUDENTS AND SETUP
+  ============================================================ */
 
-  const eligibleStudents = (teacherId: string, subjectId: string) => {
-    const teacher = teachers.find((item) => item.id === teacherId);
-    const subject = subjects.find((item) => item.id === subjectId);
-    if (
-      !teacher
-      || !subject
-      || teacher.status === "inactive"
-      || teacher.departmentId !== subject.departmentId
-      || !teacher.subjectIds?.includes(subject.id)
-    ) {
-      return [];
-    }
-    return activeStudents
-      .filter((student) => {
-        const program = programs.find((item) => item.id === student.programId);
-        if (!program || program.departmentId !== subject.departmentId) return false;
-        if (teacher.programIds?.length && !teacher.programIds.includes(program.id)) return false;
-        if (teacher.yearLevels?.length && !teacher.yearLevels.includes(student.yearLevel ?? "")) return false;
+  const activeStudents = React.useMemo(
+    () =>
+      students.filter(
+        (student) => (student.status ?? "active") === "active"
+      ),
+    [students]
+  );
+
+  const setupReady =
+    depts.length > 0 &&
+    programs.length > 0 &&
+    teachers.length > 0 &&
+    subjects.length > 0 &&
+    periods.length > 0;
+
+  /* ============================================================
+     TEACHER SUBJECT AND STUDENT ELIGIBILITY
+  ============================================================ */
+
+  const eligibleSubjectsForTeacher = React.useCallback(
+    (teacher: Teacher) =>
+      subjects.filter(
+        (subject) =>
+          subject.departmentId === teacher.departmentId &&
+          teacher.subjectIds?.includes(subject.id)
+      ),
+    [subjects]
+  );
+
+  const eligibleStudents = React.useCallback(
+    (teacherId: string, subjectId: string) => {
+      const teacher = teachers.find((item) => item.id === teacherId);
+      const subject = subjects.find((item) => item.id === subjectId);
+
+      if (
+        !teacher ||
+        !subject ||
+        teacher.status === "inactive" ||
+        teacher.departmentId !== subject.departmentId ||
+        !teacher.subjectIds?.includes(subject.id)
+      ) {
+        return [];
+      }
+
+      return activeStudents.filter((student) => {
+        const program = programs.find(
+          (item) => item.id === student.programId
+        );
+
+        if (!program || program.departmentId !== subject.departmentId) {
+          return false;
+        }
+
         if (
-          teacher.sections?.length
-          && !teacher.sections.some((section) =>
-            section.toLowerCase() === student.section?.toLowerCase()
+          teacher.programIds?.length &&
+          !teacher.programIds.includes(program.id)
+        ) {
+          return false;
+        }
+
+        if (
+          teacher.yearLevels?.length &&
+          !teacher.yearLevels.includes(student.yearLevel ?? "")
+        ) {
+          return false;
+        }
+
+        if (
+          teacher.sections?.length &&
+          !teacher.sections.some(
+            (section) =>
+              section.toLowerCase() ===
+              (student.section ?? "").toLowerCase()
           )
-        ) return false;
+        ) {
+          return false;
+        }
+
         return true;
       });
-  };
-
-  const suggestedStudentIds = (teacherId: string, subjectId: string) => {
-    return eligibleStudents(teacherId, subjectId).map((student) => student.uid);
-  };
-
-  const eligibleSubjectsForTeacher = (teacher: Teacher) => subjects.filter((subject) =>
-    subject.departmentId === teacher.departmentId
-    && teacher.subjectIds?.includes(subject.id)
+    },
+    [teachers, subjects, activeStudents, programs]
   );
 
   const defaultSubjectId = (teacher?: Teacher) => {
     if (!teacher) return "";
-    const teacherSubjects = eligibleSubjectsForTeacher(teacher);
-    return teacherSubjects.length === 1 ? teacherSubjects[0].id : "";
+
+    const list = eligibleSubjectsForTeacher(teacher);
+    return list.length === 1 ? list[0].id : "";
   };
 
-  const bulkRows = teachers
-    .filter((teacher) => teacher.status !== "inactive")
-    .map((teacher) => {
-      const teacherSubjects = eligibleSubjectsForTeacher(teacher);
-      const subjectId = bulkSubjectIds[teacher.id] ?? defaultSubjectId(teacher);
-      const studentIds = subjectId ? suggestedStudentIds(teacher.id, subjectId) : [];
-      const duplicate = assigns.some((assignment) =>
-        assignment.teacherId === teacher.id
-        && assignment.subjectId === subjectId
-        && assignment.periodId === bulkPeriodId
-      );
-      const available = Boolean(bulkPeriodId && subjectId && studentIds.length > 0 && !duplicate);
-      const unavailableReason = duplicate
-        ? "Already assigned"
-        : teacherSubjects.length === 0
-          ? "No assigned subject"
-          : !subjectId
-            ? "Select subject"
-          : studentIds.length === 0
-            ? "No eligible students"
-            : "";
-      return {
-        teacher,
-        subjects: teacherSubjects,
-        subjectId,
-        studentIds,
-        duplicate,
-        available,
-        unavailableReason,
-      };
-    });
+  const selectedTeacher = teachers.find(
+    (teacher) => teacher.id === form.teacherId
+  );
 
-  const selectedBulkRows = bulkRows.filter((row) =>
-    row.available && bulkTeacherIds.has(row.teacher.id)
+  const eligibleSubjects = selectedTeacher
+    ? eligibleSubjectsForTeacher(selectedTeacher)
+    : [];
+
+  const scopedStudents = eligibleStudents(
+    form.teacherId,
+    form.subjectId
   );
-  const bulkStudentLinks = selectedBulkRows.reduce(
-    (total, row) => total + row.studentIds.length,
-    0
+
+  /* ============================================================
+     COMPLETION COUNTS
+  ============================================================ */
+
+  const completedIdsForAssignment = React.useCallback(
+    (assignmentId: string): Set<string> =>
+      new Set(
+        completions
+          .filter(
+            (completion) =>
+              completion.assignmentId === assignmentId &&
+              typeof completion.studentId === "string" &&
+              completion.studentId.trim().length > 0
+          )
+          .map((completion) => String(completion.studentId))
+      ),
+    [completions]
   );
+
+  const completionCount = React.useCallback(
+    (assignmentId: string) =>
+      completedIdsForAssignment(assignmentId).size,
+    [completedIdsForAssignment]
+  );
+
+  const expectedCount = React.useCallback(
+    (assignment: Assignment) => {
+      const teacher = teachers.find((t) => t.id === assignment.teacherId);
+      const teacherExpected = Number((teacher as Teacher & { expectedStudents?: number })?.expectedStudents);
+      const fallbackTarget = Number(assignment.targetStudentCount) || 0;
+      
+      return Math.max(
+        0,
+        teacherExpected > 0 ? teacherExpected : fallbackTarget,
+        assignment.studentIds.length,
+        completedIdsForAssignment(assignment.id).size
+      );
+    },
+    [teachers, completedIdsForAssignment]
+  );
+
+  const pendingCount = React.useCallback(
+    (assignment: Assignment) =>
+      Math.max(
+        expectedCount(assignment) - completionCount(assignment.id),
+        0
+      ),
+    [expectedCount, completionCount]
+  );
+
+  /* ============================================================
+     CREATE ASSIGNMENT
+  ============================================================ */
 
   const openNew = () => {
-    const teacherId = teachers.find((teacher) => teacher.status !== "inactive")?.id ?? "";
-    const teacher = teachers.find((item) => item.id === teacherId);
+    const teacher = teachers.find(
+      (item) => item.status !== "inactive"
+    );
+
     const subjectId = defaultSubjectId(teacher);
+
+    const suggested = teacher
+      ? eligibleStudents(teacher.id, subjectId).map(
+          (student) => student.uid
+        )
+      : [];
+
+    const teacherExpected = Number((teacher as Teacher & { expectedStudents?: number })?.expectedStudents);
+    const teacherExpectedCount = teacherExpected > 0 ? teacherExpected : Math.max(suggested.length, 1);
+
     setEditingAssignment(null);
     setCompletedStudentIds(new Set());
+
     setForm({
-      teacherId,
+      teacherId: teacher?.id ?? "",
       subjectId,
-      periodId: assignablePeriods[0]?.id ?? "",
-      studentIds: suggestedStudentIds(teacherId, subjectId),
+      periodId: periods[0]?.id ?? "",
+      studentIds: suggested,
+      expectedStudentCount: teacherExpectedCount,
     });
+
     setOpen(true);
   };
 
-  const openEdit = async (assignment: TeacherAssignment) => {
+  /* ============================================================
+     EDIT ASSIGNMENT
+  ============================================================ */
+
+  const openEdit = async (assignment: Assignment) => {
     try {
-      const completions = await getDocs(query(
-        collection(db, "evaluationCompletions"),
-        where("assignmentId", "==", assignment.id)
-      ));
+      const snapshot = await getDocs(
+        query(
+          collection(db, "evaluationCompletions"),
+          where("assignmentId", "==", assignment.id)
+        )
+      );
+
+      const completed = new Set(
+        snapshot.docs
+          .map((item) => String(item.data().studentId ?? ""))
+          .filter(Boolean)
+      );
+
+      const teacher = teachers.find((t) => t.id === assignment.teacherId);
+      const teacherExpected = Number((teacher as Teacher & { expectedStudents?: number })?.expectedStudents);
+
+      const savedExpected = Math.max(
+        1,
+        teacherExpected > 0 ? teacherExpected : Number(assignment.targetStudentCount) || 0,
+        assignment.studentIds.length,
+        completed.size
+      );
+
       setEditingAssignment(assignment);
+      setCompletedStudentIds(completed);
+
       setForm({
         teacherId: assignment.teacherId,
         subjectId: assignment.subjectId,
         periodId: assignment.periodId,
-        studentIds: assignment.studentIds,
+        studentIds: [
+          ...new Set([...assignment.studentIds, ...completed]),
+        ],
+        expectedStudentCount: savedExpected,
       });
-      setCompletedStudentIds(new Set(
-        completions.docs
-          .map((item) => String(item.data().studentId ?? ""))
-          .filter(Boolean)
-      ));
+
       setOpen(true);
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Assignment could not be opened.");
+      console.error(error);
+      toast.error("Unable to open this assignment.");
     }
   };
 
-  const openBulk = () => {
-    const subjectIds = Object.fromEntries(
-      teachers
-        .filter((teacher) => teacher.status !== "inactive")
-        .map((teacher) => [teacher.id, defaultSubjectId(teacher)])
-    );
-    setBulkPeriodId(assignablePeriods[0]?.id ?? "");
-    setBulkSubjectIds(subjectIds);
-    setBulkTeacherIds(new Set());
-    setBulkOpen(true);
-  };
+  /* ============================================================
+     SAVE ASSIGNMENT
+  ============================================================ */
 
-  const onSave = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const onSave = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
     setLoading(true);
+
     try {
-      const subj = subjects.find((subject) => subject.id === form.subjectId);
-      const teacher = teachers.find((item) => item.id === form.teacherId);
-      if (!subj) throw new Error("Select a subject");
-      if (!teacher || teacher.status === "inactive") throw new Error("Select an active teacher");
+      const teacher = teachers.find(
+        (item) => item.id === form.teacherId
+      );
+      const subject = subjects.find(
+        (item) => item.id === form.subjectId
+      );
+      const period = periods.find(
+        (item) => item.id === form.periodId
+      );
+
+      if (!teacher || teacher.status === "inactive") {
+        throw new Error("Please select an active teacher.");
+      }
+
+      if (!subject) {
+        throw new Error("Please select a subject.");
+      }
+
+      if (!period) {
+        throw new Error("Please select an evaluation period.");
+      }
+
       if (
-        teacher.departmentId !== subj.departmentId
-        || !teacher.subjectIds?.includes(subj.id)
+        teacher.departmentId !== subject.departmentId ||
+        !teacher.subjectIds?.includes(subject.id)
       ) {
-        throw new Error("The selected subject is not assigned to this teacher");
+        throw new Error(
+          "The selected subject is not assigned to this teacher."
+        );
       }
-      const eligibleIds = new Set(
-        eligibleStudents(teacher.id, subj.id).map((student) => student.uid)
+
+      const completed = editingAssignment
+        ? completedStudentIds
+        : new Set<string>();
+
+      const allowedIds = new Set(
+        eligibleStudents(teacher.id, subject.id).map(
+          (student) => student.uid
+        )
       );
-      if (form.studentIds.some((studentId) =>
-        !eligibleIds.has(studentId) && !completedStudentIds.has(studentId)
-      )) {
-        throw new Error("One or more selected students are outside the teacher's Program, year, or section scope");
-      }
-      const studentIds = [...new Set([
-        ...form.studentIds.filter((studentId) => eligibleIds.has(studentId)),
-        ...completedStudentIds,
-      ])];
-      if (studentIds.length === 0) {
-        throw new Error("Select at least one student");
-      }
-      const duplicate = assigns.some((assignment) =>
-        assignment.id !== editingAssignment?.id
-        &&
-        assignment.teacherId === form.teacherId
-        && assignment.subjectId === form.subjectId
-        && assignment.periodId === form.periodId
+
+      const invalidIds = form.studentIds.filter(
+        (id) => !allowedIds.has(id) && !completed.has(id)
       );
+
+      if (invalidIds.length > 0) {
+        throw new Error(
+          "Some selected students do not match the teacher's department, program, year, or section."
+        );
+      }
+
+      const studentIds = [
+        ...new Set([
+          ...form.studentIds.filter((id) => allowedIds.has(id)),
+          ...completed,
+        ]),
+      ];
+
+      const teacherExpected = Number((teacher as Teacher & { expectedStudents?: number })?.expectedStudents);
+
+      const expectedStudentCount = editingAssignment
+        ? Math.max(
+            teacherExpected > 0 ? teacherExpected : Number(editingAssignment.targetStudentCount) || 0,
+            studentIds.length,
+            completed.size,
+            1
+          )
+        : Math.max(
+            1,
+            teacherExpected > 0 ? teacherExpected : Number(form.expectedStudentCount) || 0,
+            studentIds.length,
+            completed.size
+          );
+
+      const duplicate = assigns.some(
+        (assignment) =>
+          assignment.id !== editingAssignment?.id &&
+          assignment.teacherId === teacher.id &&
+          assignment.subjectId === subject.id &&
+          assignment.periodId === period.id
+      );
+
       if (duplicate) {
-        throw new Error("This teacher and subject already have an assignment in this evaluation period");
+        throw new Error(
+          "This teacher and subject already have an assignment for this evaluation period."
+        );
       }
+
       const payload = {
-        teacherId: form.teacherId,
-        subjectId: form.subjectId,
-        departmentId: subj.departmentId,
+        teacherId: teacher.id,
+        subjectId: subject.id,
+        departmentId: subject.departmentId,
         studentIds,
+        targetStudentCount: expectedStudentCount,
         programIds: teacher.programIds ?? [],
         yearLevels: teacher.yearLevels ?? [],
         sections: teacher.sections ?? [],
-        periodId: form.periodId,
+        periodId: period.id,
         updatedAt: Date.now(),
       };
+
       if (editingAssignment) {
-        const subjectCorrected = editingAssignment.subjectId !== form.subjectId;
-        if (subjectCorrected && completedStudentIds.size > 0) {
-          const response = await authenticatedFetch("/api/admin/assignments", {
-            method: "PATCH",
-            body: JSON.stringify({
-              assignmentId: editingAssignment.id,
-              subjectId: form.subjectId,
-            }),
-          });
-          await readApiResponse<{ ok: true; recordsUpdated: number }>(response);
+        if (
+          editingAssignment.subjectId !== subject.id &&
+          completed.size > 0
+        ) {
+          const response = await authenticatedFetch(
+            "/api/admin/assignments",
+            {
+              method: "PATCH",
+              body: JSON.stringify({
+                assignmentId: editingAssignment.id,
+                subjectId: subject.id,
+              }),
+            }
+          );
+
+          await readApiResponse<{
+            ok: true;
+            recordsUpdated: number;
+          }>(response);
         }
-        await updateDoc(doc(db, "teacherAssignments", editingAssignment.id), payload);
+
+        await updateDoc(
+          doc(db, "teacherAssignments", editingAssignment.id),
+          payload
+        );
+
         void recordActivity("teacher_assignment_updated", {
           assignmentId: editingAssignment.id,
-          teacherId: form.teacherId,
-          periodId: form.periodId,
-          students: studentIds.length,
+          teacherId: teacher.id,
+          periodId: period.id,
+          expectedStudentCount,
+          assignedStudents: studentIds.length,
         });
-        toast.success(
-          subjectCorrected && completedStudentIds.size > 0
-            ? `Subject corrected and assignment updated for ${studentIds.length} student${studentIds.length === 1 ? "" : "s"}`
-            : `Assignment updated for ${studentIds.length} student${studentIds.length === 1 ? "" : "s"}`
-        );
+
+        toast.success("Assignment updated successfully.");
       } else {
-        const created = await addDoc(collection(db, "teacherAssignments"), {
-          ...payload,
-          createdAt: Date.now(),
-        });
+        const created = await addDoc(
+          collection(db, "teacherAssignments"),
+          {
+            ...payload,
+            createdAt: Date.now(),
+          }
+        );
+
         void recordActivity("teacher_assignment_created", {
           assignmentId: created.id,
-          teacherId: form.teacherId,
-          periodId: form.periodId,
-          students: studentIds.length,
+          teacherId: teacher.id,
+          periodId: period.id,
+          expectedStudentCount,
+          assignedStudents: studentIds.length,
         });
-        toast.success(`Assignment created for ${studentIds.length} student${studentIds.length === 1 ? "" : "s"}`);
+
+        toast.success("Assignment created successfully.");
       }
+
       setOpen(false);
-    } catch (err: unknown) {
-      toast.error(err instanceof Error ? err.message : "Save failed");
+    } catch (error) {
+      console.error(error);
+      toast.error(
+        error instanceof Error ? error.message : "Save failed."
+      );
     } finally {
       setLoading(false);
     }
   };
 
-  const onBulkSave = async (event: React.FormEvent) => {
+  /* ============================================================
+     BULK ASSIGNMENTS
+  ============================================================ */
+
+  const bulkRows = teachers
+    .filter((teacher) => teacher.status !== "inactive")
+    .map((teacher) => {
+      const teacherSubjects = eligibleSubjectsForTeacher(teacher);
+
+      const subjectId =
+        bulkSubjectIds[teacher.id] ?? defaultSubjectId(teacher);
+
+      const teacherExpected = Number((teacher as Teacher & { expectedStudents?: number })?.expectedStudents);
+      const defaultCount = teacherExpected > 0 ? teacherExpected : 1;
+
+      const count = Math.max(
+        1,
+        Math.floor(Number(bulkExpectedCounts[teacher.id] ?? defaultCount))
+      );
+
+      const studentIds = subjectId
+        ? eligibleStudents(teacher.id, subjectId)
+            .map((student) => student.uid)
+            .slice(0, count)
+        : [];
+
+      const duplicate = assigns.some(
+        (assignment) =>
+          assignment.teacherId === teacher.id &&
+          assignment.subjectId === subjectId &&
+          assignment.periodId === bulkPeriodId
+      );
+
+      const available = Boolean(
+        bulkPeriodId &&
+          subjectId &&
+          !duplicate &&
+          teacherSubjects.some((subject) => subject.id === subjectId)
+      );
+
+      return {
+        teacher,
+        subjects: teacherSubjects,
+        subjectId,
+        count,
+        studentIds,
+        duplicate,
+        available,
+      };
+    });
+
+  const selectedBulkRows = bulkRows.filter(
+    (row) => row.available && bulkTeacherIds.has(row.teacher.id)
+  );
+
+  const openBulk = () => {
+    const subjectIds: Record<string, string> = {};
+    const counts: Record<string, number> = {};
+
+    teachers
+      .filter((teacher) => teacher.status !== "inactive")
+      .forEach((teacher) => {
+        const subjectId = defaultSubjectId(teacher);
+        subjectIds[teacher.id] = subjectId;
+
+        const teacherExpected = Number((teacher as Teacher & { expectedStudents?: number })?.expectedStudents);
+        counts[teacher.id] = teacherExpected > 0 ? teacherExpected : 1;
+      });
+
+    setBulkPeriodId(periods[0]?.id ?? "");
+    setBulkSubjectIds(subjectIds);
+    setBulkExpectedCounts(counts);
+    setBulkTeacherIds(new Set());
+    setBulkOpen(true);
+  };
+
+  const onBulkSave = async (
+    event: React.FormEvent<HTMLFormElement>
+  ) => {
     event.preventDefault();
-    if (!bulkPeriodId) {
-      toast.error("Select an evaluation period");
-      return;
-    }
-    if (selectedBulkRows.length === 0) {
-      toast.error("Select at least one available teacher");
-      return;
-    }
-    if (selectedBulkRows.length > 450) {
-      toast.error("Create at most 450 assignments in one batch");
+
+    if (!bulkPeriodId || selectedBulkRows.length === 0) {
+      toast.error(
+        "Select an evaluation period and at least one available teacher."
+      );
       return;
     }
 
     setBulkLoading(true);
+
     try {
-      const batch = writeBatch(db);
-      selectedBulkRows.forEach((row) => {
-        const teacher = row.teacher;
-        const assignmentRef = doc(collection(db, "teacherAssignments"));
-        batch.set(assignmentRef, {
-          teacherId: teacher.id,
-          subjectId: row.subjectId,
-          departmentId: teacher.departmentId,
-          studentIds: row.studentIds,
-          programIds: teacher.programIds ?? [],
-          yearLevels: teacher.yearLevels ?? [],
-          sections: teacher.sections ?? [],
-          periodId: bulkPeriodId,
-          createdAt: Date.now(),
-        });
-      });
-      await batch.commit();
+      for (
+        let start = 0;
+        start < selectedBulkRows.length;
+        start += 400
+      ) {
+        const batch = writeBatch(db);
+
+        selectedBulkRows
+          .slice(start, start + 400)
+          .forEach((row) => {
+            const ref = doc(collection(db, "teacherAssignments"));
+
+            const teacherExpected = Number((row.teacher as Teacher & { expectedStudents?: number })?.expectedStudents);
+
+            batch.set(ref, {
+              teacherId: row.teacher.id,
+              subjectId: row.subjectId,
+              departmentId: row.teacher.departmentId,
+              studentIds: row.studentIds,
+              targetStudentCount: Math.max(
+                teacherExpected > 0 ? teacherExpected : row.count,
+                row.studentIds.length
+              ),
+              programIds: row.teacher.programIds ?? [],
+              yearLevels: row.teacher.yearLevels ?? [],
+              sections: row.teacher.sections ?? [],
+              periodId: bulkPeriodId,
+              createdAt: Date.now(),
+            });
+          });
+
+        await batch.commit();
+      }
+
       void recordActivity("teacher_assignments_bulk_created", {
         periodId: bulkPeriodId,
         assignments: selectedBulkRows.length,
-        studentLinks: bulkStudentLinks,
       });
+
       toast.success(
-        `${selectedBulkRows.length} teacher assignment${selectedBulkRows.length === 1 ? "" : "s"} created`
+        `${selectedBulkRows.length} assignment(s) created successfully.`
       );
+
       setBulkOpen(false);
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Bulk assignment failed");
+      console.error(error);
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : "Bulk assignment failed."
+      );
     } finally {
       setBulkLoading(false);
     }
   };
 
-  const onDelete = async (a: TeacherAssignment) => {
+  /* ============================================================
+     DELETE ASSIGNMENT
+  ============================================================ */
+
+  const onDelete = async (assignment: Assignment) => {
     try {
-      const [responses, completions] = await Promise.all([
-        getDocs(query(collection(db, "evaluations"), where("assignmentId", "==", a.id))),
-        getDocs(query(collection(db, "evaluationCompletions"), where("assignmentId", "==", a.id))),
-      ]);
-      if (!responses.empty || !completions.empty) {
-        throw new Error("This assignment has submissions and cannot be deleted.");
+      const pending = pendingCount(assignment);
+      if (pending > 0) {
+        toast.error(
+          "Cannot delete assignment: Some students have not finished evaluating this teacher."
+        );
+        return;
       }
-      if (!confirm("Delete this assignment?")) return;
-      await deleteDoc(doc(db, "teacherAssignments", a.id));
-      void recordActivity("teacher_assignment_deleted", { assignmentId: a.id });
-      toast.success("Assignment deleted");
+
+      const [evaluationDocs, completionDocs] = await Promise.all([
+        getDocs(
+          query(
+            collection(db, "evaluations"),
+            where("assignmentId", "==", assignment.id)
+          )
+        ),
+        getDocs(
+          query(
+            collection(db, "evaluationCompletions"),
+            where("assignmentId", "==", assignment.id)
+          )
+        ),
+      ]);
+
+      if (!evaluationDocs.empty || !completionDocs.empty) {
+        toast.error(
+          "This assignment has evaluation submissions and cannot be deleted."
+        );
+        return;
+      }
+
+      if (!window.confirm("Delete this assignment?")) return;
+
+      await deleteDoc(
+        doc(db, "teacherAssignments", assignment.id)
+      );
+
+      void recordActivity("teacher_assignment_deleted", {
+        assignmentId: assignment.id,
+      });
+
+      toast.success("Assignment deleted.");
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Assignment deletion failed.");
+      console.error(error);
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : "Assignment deletion failed."
+      );
     }
   };
 
-  const setupItems = [
-    { label: "Departments", count: depts.length, href: "/admin/departments" },
-    { label: "Programs", count: programs.length, href: "/admin/programs" },
-    { label: "Teachers", count: teachers.length, href: "/admin/teachers" },
-    { label: "Subjects", count: subjects.length, href: "/admin/subjects" },
-    { label: "Available periods", count: assignablePeriods.length, href: "/admin/periods" },
-    { label: "Active students", count: activeStudents.length, href: "/admin/users" },
-  ];
-  const selectedTeacher = teachers.find((teacher) => teacher.id === form.teacherId);
-  const eligibleSubjects = subjects.filter((subject) =>
-    subject.departmentId === selectedTeacher?.departmentId
-    && selectedTeacher?.subjectIds?.includes(subject.id)
-  );
-  const scopedStudents = eligibleStudents(form.teacherId, form.subjectId);
+  /* ============================================================
+     PROGRESS MODAL DATA
+  ============================================================ */
+
   const progressCompletions = progressAssignment
-    ? completions.filter((completion) => completion.assignmentId === progressAssignment.id)
-    : [];
-  const progressSubject = progressAssignment
-    ? subjects.find((subject) => subject.id === progressAssignment.subjectId)
-    : undefined;
-  const progressCompletionByStudent = new Map(
-    progressCompletions.map((completion) => [completion.studentId, completion])
-  );
-  const progressStudents = progressAssignment
-    ? progressAssignment.studentIds.map((studentId) => ({
-        studentId,
-        student: students.find((item) => item.uid === studentId),
-        completion: progressCompletionByStudent.get(studentId),
-      })).sort((left, right) => {
-        if (Boolean(left.completion) !== Boolean(right.completion)) return left.completion ? -1 : 1;
-        return (left.student?.displayName ?? left.student?.email ?? left.studentId)
-          .localeCompare(right.student?.displayName ?? right.student?.email ?? right.studentId);
-      })
+    ? completions.filter(
+        (completion) =>
+          completion.assignmentId === progressAssignment.id
+      )
     : [];
 
+  const progressCompletionMap = new Map(
+    progressCompletions
+      .filter((completion) => Boolean(completion.studentId))
+      .map((completion) => [
+        String(completion.studentId),
+        completion,
+      ])
+  );
+
+  const progressStudents = progressAssignment
+    ? [
+        ...new Set([
+          ...progressAssignment.studentIds,
+          ...Array.from(progressCompletionMap.keys()),
+        ]),
+      ]
+        .map((studentId) => ({
+          studentId,
+          student: students.find(
+            (item) => item.uid === studentId
+          ),
+          completion: progressCompletionMap.get(studentId),
+        }))
+        .sort((a, b) => {
+          if (Boolean(a.completion) !== Boolean(b.completion)) {
+            return a.completion ? -1 : 1;
+          }
+
+          const nameA =
+            a.student?.displayName ??
+            a.student?.email ??
+            a.studentId;
+
+          const nameB =
+            b.student?.displayName ??
+            b.student?.email ??
+            b.studentId;
+
+          return nameA.localeCompare(nameB);
+        })
+    : [];
+
+  const progressCompleted = progressAssignment
+    ? completionCount(progressAssignment.id)
+    : 0;
+
+  const progressExpected = progressAssignment
+    ? expectedCount(progressAssignment)
+    : 0;
+
+  const progressPending = progressAssignment
+    ? pendingCount(progressAssignment)
+    : 0;
+
+  /* ============================================================
+     SETUP LINKS
+  ============================================================ */
+
+  const setupItems = [
+    {
+      label: "Departments",
+      count: depts.length,
+      href: "/admin/departments",
+    },
+    {
+      label: "Programs",
+      count: programs.length,
+      href: "/admin/programs",
+    },
+    {
+      label: "Teachers",
+      count: teachers.length,
+      href: "/admin/teachers",
+    },
+    {
+      label: "Subjects",
+      count: subjects.length,
+      href: "/admin/subjects",
+    },
+    {
+      label: "Evaluation periods",
+      count: periods.length,
+      href: "/admin/periods",
+    },
+    {
+      label: "Active students",
+      count: activeStudents.length,
+      href: "/admin/users",
+    },
+  ];
+
+  /* ============================================================
+     PAGE UI
+  ============================================================ */
+
   return (
-    <div>
+    <div className="min-h-screen bg-slate-50 text-slate-900 dark:bg-slate-950 dark:text-slate-100">
       <PageHeader
         title="Teacher Assignments"
-        description="Assign teachers to subjects and periods. Students in that scope can evaluate."
+        description="Manage teacher assignments and track student evaluation completion."
         action={
           <div className="flex flex-wrap items-center justify-end gap-2">
             <button
+              type="button"
               onClick={openBulk}
               disabled={!setupReady}
-              title={setupReady ? "Assign multiple teachers" : "Complete the required setup first"}
-              className="btn-secondary disabled:cursor-not-allowed disabled:opacity-50"
+              className="btn-secondary disabled:opacity-50"
             >
-              <UsersRound className="h-4 w-4" /> Bulk assign
+              <UsersRound className="h-4 w-4" />
+              Bulk assign
             </button>
+
             <button
+              type="button"
               onClick={openNew}
               disabled={!setupReady}
-              title={setupReady ? "Create a teacher assignment" : "Complete the required setup first"}
-              className="btn-primary disabled:cursor-not-allowed disabled:opacity-50"
+              className="btn-primary disabled:opacity-50"
             >
-              <Plus className="h-4 w-4" /> New assignment
+              <Plus className="h-4 w-4" />
+              New assignment
             </button>
           </div>
         }
       />
 
-      <section className="mb-5 overflow-hidden rounded-lg border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900">
-        <div className="flex items-start gap-3 border-b border-slate-200 px-4 py-3 dark:border-slate-800">
-          {setupReady
-            ? <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-600" />
-            : <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />}
-          <div>
-            <h2 className="text-sm font-semibold text-slate-900 dark:text-white">
-              {setupReady ? "Ready for assignments" : "Assignment setup is incomplete"}
-            </h2>
-            <p className="mt-0.5 text-xs text-slate-500">
-              Each evaluation needs a department, teacher, subject, period, and at least one student.
+      <section className="mb-5 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-900">
+        {!setupReady && (
+          <div className="flex items-center gap-3 border-b border-slate-200 bg-amber-50 px-4 py-3 text-amber-900 dark:border-slate-800 dark:bg-amber-500/10 dark:text-amber-200">
+            <AlertCircle className="h-4 w-4 shrink-0 text-amber-600 dark:text-amber-400" />
+            <p className="text-sm font-semibold">
+              Assignment setup is incomplete. Check the setup items below.
             </p>
           </div>
-        </div>
+        )}
+
         <div className="grid divide-y divide-slate-200 sm:grid-cols-3 sm:divide-x sm:divide-y-0 lg:grid-cols-6 dark:divide-slate-800">
           {setupItems.map((item) => (
             <Link
               key={item.label}
               href={item.href}
-              className="flex items-center justify-between gap-3 px-4 py-3 text-sm transition-colors hover:bg-slate-50 dark:hover:bg-slate-800/50"
+              className="flex items-center justify-between gap-3 px-4 py-3 text-sm transition-colors hover:bg-slate-50 dark:hover:bg-slate-800/60"
             >
-              <span className="text-slate-600 dark:text-slate-300">{item.label}</span>
-              <span className={`font-semibold ${item.count > 0 ? "text-emerald-600 dark:text-emerald-400" : "text-amber-600 dark:text-amber-400"}`}>
+              <span className="text-slate-600 dark:text-slate-400">{item.label}</span>
+              <span
+                className={
+                  item.count > 0
+                    ? "font-semibold text-emerald-600 dark:text-emerald-400"
+                    : "font-semibold text-amber-600 dark:text-amber-400"
+                }
+              >
                 {item.count}
               </span>
             </Link>
@@ -483,73 +1047,171 @@ export default function AdminAssignmentsPage() {
         </div>
       </section>
 
-      <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900">
+      {/* ASSIGNMENTS TABLE */}
+
+      <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-900">
         <div className="overflow-x-auto">
-          <table className="w-full min-w-[860px] text-sm">
-            <thead className="bg-slate-50 dark:bg-slate-800/50">
+          <table className="w-full min-w-[1000px] text-sm">
+            <thead className="bg-slate-50 text-slate-700 dark:bg-slate-800/80 dark:text-slate-300">
               <tr>
-                <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">Teacher</th>
-                <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">Subject</th>
-                <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">Period</th>
-                <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">Student progress</th>
-                <th className="px-4 py-3 text-right text-xs font-semibold uppercase tracking-wider text-slate-500">Actions</th>
+                {[
+                  "Teacher",
+                  "Subject",
+                  "Period",
+                  "Student Progress",
+                  "Actions",
+                ].map((heading) => (
+                  <th
+                    key={heading}
+                    className={`px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider ${
+                      heading === "Actions" ? "text-right" : ""
+                    }`}
+                  >
+                    {heading}
+                  </th>
+                ))}
               </tr>
             </thead>
-            <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+
+            <tbody className="divide-y divide-slate-200 dark:divide-slate-800">
               {assigns.length === 0 ? (
                 <tr>
-                  <td colSpan={5} className="px-4 py-10 text-center text-sm text-slate-500">
-                    No assignments yet
+                  <td
+                    colSpan={5}
+                    className="px-4 py-10 text-center text-slate-500 dark:text-slate-400"
+                  >
+                    No assignments yet.
                   </td>
                 </tr>
               ) : (
-                assigns.map((a) => {
-                  const teacher = teachers.find((item) => item.id === a.teacherId);
-                  const subject = subjects.find((item) => item.id === a.subjectId);
-                  const subjectMatchesTeacher = Boolean(
-                    teacher && subject
-                    && teacher.departmentId === subject.departmentId
-                    && teacher.subjectIds?.includes(subject.id)
+                assigns.map((assignment) => {
+                  const teacher = teachers.find(
+                    (item) => item.id === assignment.teacherId
                   );
+
+                  const subject = subjects.find(
+                    (item) => item.id === assignment.subjectId
+                  );
+
+                  const period = periods.find(
+                    (item) => item.id === assignment.periodId
+                  );
+
+                  const completed = completionCount(assignment.id);
+                  const expected = expectedCount(assignment);
+                  const pending = pendingCount(assignment);
+                  const isFullyCompleted = expected > 0 && pending === 0;
+
+                  const validSubject = Boolean(
+                    teacher &&
+                      subject &&
+                      teacher.departmentId === subject.departmentId &&
+                      teacher.subjectIds?.includes(subject.id)
+                  );
+
                   return (
-                  <tr key={a.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/30">
-                    <td className="px-4 py-3 font-medium">{teacher?.displayName ?? a.teacherId}</td>
-                    <td className="px-4 py-3">
-                      <span className="font-medium">{subject ? formatSubjectLabel(subject) : a.subjectId}</span>
-                      {!subjectMatchesTeacher && (
-                        <span className="ml-2 inline-flex rounded bg-rose-500/10 px-1.5 py-0.5 text-xs font-semibold text-rose-600 dark:text-rose-300">
-                          Not assigned to teacher
-                        </span>
-                      )}
-                    </td>
-                    <td className="px-4 py-3 text-slate-600 dark:text-slate-400">{periods.find((p) => p.id === a.periodId)?.name ?? a.periodId}</td>
-                    <td className="px-4 py-3 text-slate-600 dark:text-slate-400">
-                      <span className="font-medium text-slate-900 dark:text-white">{a.studentIds.length} assigned</span>
-                      <span className="ml-2 text-emerald-600 dark:text-emerald-400">{completionCounts[a.id] ?? 0} completed</span>
-                      <span className="ml-2 text-amber-600 dark:text-amber-400">{Math.max(a.studentIds.length - (completionCounts[a.id] ?? 0), 0)} pending</span>
-                    </td>
-                    <td className="px-4 py-3 text-right">
-                      <button
-                        onClick={() => setProgressAssignment(a)}
-                        className="mr-1 rounded-lg p-1.5 text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800"
-                        title="View student progress"
-                        aria-label="View student progress"
-                      >
-                        <Eye className="h-4 w-4" />
-                      </button>
-                      <button
-                        onClick={() => void openEdit(a)}
-                        className="mr-1 rounded-lg p-1.5 text-brand-700 hover:bg-brand-50 dark:text-brand-300 dark:hover:bg-brand-500/10"
-                        title="Edit assignment"
-                        aria-label="Edit assignment"
-                      >
-                        <Pencil className="h-4 w-4" />
-                      </button>
-                      <button onClick={() => onDelete(a)} className="rounded-lg p-1.5 text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-500/10">
-                        Delete
-                      </button>
-                    </td>
-                  </tr>
+                    <tr
+                      key={assignment.id}
+                      className="transition-colors hover:bg-slate-50 dark:hover:bg-slate-800/40"
+                    >
+                      <td className="px-4 py-3 font-medium text-slate-900 dark:text-white">
+                        {teacher?.displayName ?? assignment.teacherId}
+                      </td>
+
+                      <td className="px-4 py-3 text-slate-700 dark:text-slate-300">
+                        {subject
+                          ? formatSubjectLabel(subject)
+                          : assignment.subjectId}
+
+                        {!validSubject && (
+                          <span className="ml-2 rounded bg-rose-500/10 px-1.5 py-0.5 text-xs text-rose-600 dark:text-rose-300">
+                            Not assigned
+                          </span>
+                        )}
+                      </td>
+
+                      <td className="px-4 py-3">
+                        <p className="font-medium text-slate-900 dark:text-slate-200">
+                          {period?.name ?? assignment.periodId}
+                        </p>
+
+                        {period?.status && (
+                          <p className="text-xs text-slate-500 dark:text-slate-400">
+                            {period.status}
+                          </p>
+                        )}
+                      </td>
+
+                      <td className="px-4 py-3">
+                        <div className="flex flex-wrap gap-2 text-xs">
+                          <span className="rounded-md border border-emerald-500/20 bg-emerald-500/10 px-2 py-1 font-semibold text-emerald-700 dark:text-emerald-300">
+                            Completed: {completed}/{expected}
+                          </span>
+
+                          <span className="rounded-md border border-amber-500/20 bg-amber-500/10 px-2 py-1 font-semibold text-amber-700 dark:text-amber-300">
+                            Pending: {pending}
+                          </span>
+                        </div>
+
+                        <div className="mt-2 h-1.5 w-full max-w-56 overflow-hidden rounded-full bg-slate-200 dark:bg-slate-800">
+                          <div
+                            className="h-full rounded-full bg-emerald-500 transition-all"
+                            style={{
+                              width: `${
+                                expected > 0
+                                  ? Math.min(
+                                      (completed / expected) * 100,
+                                      100
+                                    )
+                                  : 0
+                              }%`,
+                            }}
+                          />
+                        </div>
+                      </td>
+
+                      <td className="px-4 py-3 text-right">
+                        <button
+                          type="button"
+                          onClick={() =>
+                            router.push(`/admin/analytics?assignmentId=${assignment.id}`)
+                          }
+                          className="mr-1 rounded-lg p-1.5 text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800"
+                          title="View analytics"
+                          aria-label="View analytics"
+                        >
+                          <BarChart3 className="h-4 w-4" />
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => void openEdit(assignment)}
+                          className="mr-1 rounded-lg p-1.5 text-sky-600 hover:bg-sky-50 dark:text-sky-300 dark:hover:bg-sky-500/10"
+                          title="Edit assignment"
+                          aria-label="Edit assignment"
+                        >
+                          <Pencil className="h-4 w-4" />
+                        </button>
+
+                        <button
+                          type="button"
+                          disabled={!isFullyCompleted}
+                          onClick={() => void onDelete(assignment)}
+                          title={
+                            isFullyCompleted
+                              ? "Delete assignment"
+                              : "Cannot delete: Some student evaluations are still pending"
+                          }
+                          className={`rounded-lg px-2 py-1.5 ${
+                            isFullyCompleted
+                              ? "text-rose-600 hover:bg-rose-50 dark:text-rose-400 dark:hover:bg-rose-500/10"
+                              : "cursor-not-allowed text-slate-400 opacity-40 dark:text-slate-600"
+                          }`}
+                        >
+                          Delete
+                        </button>
+                      </td>
+                    </tr>
                   );
                 })
               )}
@@ -558,6 +1220,8 @@ export default function AdminAssignmentsPage() {
         </div>
       </div>
 
+      {/* STUDENT PROGRESS MODAL */}
+
       <Modal
         open={Boolean(progressAssignment)}
         onClose={() => setProgressAssignment(null)}
@@ -565,68 +1229,142 @@ export default function AdminAssignmentsPage() {
         size="lg"
       >
         {progressAssignment && (
-          <div className="space-y-4">
-            <div>
-              <p className="font-semibold text-slate-950 dark:text-white">
-                {teachers.find((teacher) => teacher.id === progressAssignment.teacherId)?.displayName ?? "Teacher"}
+          <div className="space-y-4 text-slate-900 dark:text-slate-100">
+            <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-900">
+              <p className="font-semibold text-slate-900 dark:text-white">
+                {teachers.find(
+                  (item) => item.id === progressAssignment.teacherId
+                )?.displayName ?? "Teacher"}
               </p>
-              <p className="text-sm text-slate-500">
-                {progressSubject ? formatSubjectLabel(progressSubject) : "Subject unavailable"}
+
+              <p className="text-sm text-slate-500 dark:text-slate-400">
+                {subjects.find(
+                  (item) => item.id === progressAssignment.subjectId
+                )
+                  ? formatSubjectLabel(
+                      subjects.find(
+                        (item) => item.id === progressAssignment.subjectId
+                      )!
+                    )
+                  : "Subject unavailable"}
                 {" / "}
-                {periods.find((period) => period.id === progressAssignment.periodId)?.name ?? "Evaluation period"}
+                {periods.find(
+                  (item) => item.id === progressAssignment.periodId
+                )?.name ?? "Evaluation period"}
               </p>
             </div>
 
-            <div className="grid grid-cols-3 gap-2">
-              <ProgressSummary label="Assigned" value={progressStudents.length} tone="neutral" />
-              <ProgressSummary label="Completed" value={progressStudents.filter((item) => item.completion).length} tone="complete" />
-              <ProgressSummary label="Pending" value={progressStudents.filter((item) => !item.completion).length} tone="pending" />
+            <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+              <ProgressSummary
+                label="Completed"
+                value={`${progressCompleted}/${progressExpected}`}
+                tone="complete"
+              />
+
+              <ProgressSummary
+                label="Pending"
+                value={progressPending}
+                tone="pending"
+              />
+
+              <ProgressSummary
+                label="Registered students"
+                value={progressStudents.length}
+                tone="neutral"
+              />
             </div>
 
-            <div className="max-h-[50vh] divide-y divide-slate-100 overflow-y-auto rounded-lg border border-slate-200 dark:divide-slate-800 dark:border-slate-800">
+            <p className="text-xs text-slate-500 dark:text-slate-400">
+              Completed is calculated from unique student IDs in
+              evaluationCompletions for this assignment. Pending is the
+              expected total minus completed evaluations. Expected students
+              without registered accounts cannot be listed by name.
+            </p>
+
+            <div className="max-h-[50vh] divide-y divide-slate-200 overflow-y-auto rounded-xl border border-slate-200 bg-white dark:divide-slate-800 dark:border-slate-800 dark:bg-slate-900">
               {progressStudents.length === 0 ? (
-                <p className="px-4 py-8 text-center text-sm text-slate-500">No students are assigned.</p>
-              ) : progressStudents.map(({ studentId, student, completion }) => {
-                const program = programs.find((item) => item.id === student?.programId);
-                const academicDetails = [
-                  program?.code ?? student?.course,
-                  student?.yearLevel ? `Year ${student.yearLevel}` : "",
-                  student?.section ? `Section ${student.section}` : "",
-                ].filter(Boolean).join(" / ");
-                return (
-                  <div key={studentId} className="flex items-start justify-between gap-4 px-4 py-3">
-                    <div className="min-w-0">
-                      <p className="truncate text-sm font-medium text-slate-950 dark:text-white">
-                        {student?.displayName || student?.email || studentId}
-                      </p>
-                      <p className="truncate text-xs text-slate-500">
-                        {student?.email && student.displayName ? `${student.email} / ` : ""}
-                        {academicDetails || "No academic details"}
-                      </p>
-                    </div>
-                    {completion ? (
-                      <div className="shrink-0 text-right">
-                        <span className="inline-flex items-center gap-1 text-xs font-semibold text-emerald-600 dark:text-emerald-400">
-                          <CheckCircle2 className="h-3.5 w-3.5" /> Completed
-                        </span>
-                        <p className="mt-0.5 text-[11px] text-slate-500">{fmtDateTime(completion.submittedAt)}</p>
+                <p className="px-4 py-8 text-center text-sm text-slate-500 dark:text-slate-400">
+                  No registered students are linked to this assignment yet.
+                  Expected pending evaluations are still included in the
+                  count above.
+                </p>
+              ) : (
+                progressStudents.map(
+                  ({ studentId, student, completion }) => {
+                    const program = programs.find(
+                      (item) => item.id === student?.programId
+                    );
+
+                    const details = [
+                      program?.code ?? student?.course,
+                      student?.yearLevel
+                        ? `Year ${student.yearLevel}`
+                        : "",
+                      student?.section
+                        ? `Section ${student.section}`
+                        : "",
+                    ]
+                      .filter(Boolean)
+                      .join(" / ");
+
+                    return (
+                      <div
+                        key={studentId}
+                        className="flex items-start justify-between gap-4 px-4 py-3"
+                      >
+                        <div className="min-w-0">
+                          <p className="truncate text-sm font-medium text-slate-900 dark:text-white">
+                            {student?.displayName ||
+                              student?.email ||
+                              studentId}
+                          </p>
+
+                          <p className="truncate text-xs text-slate-500 dark:text-slate-400">
+                            {student?.email && student?.displayName
+                              ? `${student.email} / `
+                              : ""}
+                            {details || "No academic details"}
+                          </p>
+                        </div>
+
+                        {completion ? (
+                          <div className="shrink-0 text-right">
+                            <span className="inline-flex items-center gap-1 text-xs font-semibold text-emerald-600 dark:text-emerald-400">
+                              <CheckCircle2 className="h-3.5 w-3.5" />
+                              Completed
+                            </span>
+
+                            <p className="mt-0.5 text-[11px] text-slate-400 dark:text-slate-500">
+                              {fmtDateTime(completion.submittedAt)}
+                            </p>
+                          </div>
+                        ) : (
+                          <span className="inline-flex shrink-0 items-center gap-1 text-xs font-semibold text-amber-600 dark:text-amber-400">
+                            <Clock3 className="h-3.5 w-3.5" />
+                            Pending
+                          </span>
+                        )}
                       </div>
-                    ) : (
-                      <span className="inline-flex shrink-0 items-center gap-1 text-xs font-semibold text-amber-600 dark:text-amber-400">
-                        <Clock3 className="h-3.5 w-3.5" /> Pending
-                      </span>
-                    )}
-                  </div>
-                );
-              })}
+                    );
+                  }
+                )
+              )}
             </div>
 
             <div className="flex justify-end">
-              <button type="button" onClick={() => setProgressAssignment(null)} className="btn-secondary">Close</button>
+              <button
+                type="button"
+                onClick={() => setProgressAssignment(null)}
+                className="btn-secondary"
+              >
+                Close
+              </button>
             </div>
           </div>
         )}
       </Modal>
+
+      {/* BULK ASSIGNMENT MODAL */}
 
       <Modal
         open={bulkOpen}
@@ -635,10 +1373,7 @@ export default function AdminAssignmentsPage() {
         size="lg"
       >
         <form onSubmit={onBulkSave} className="space-y-4">
-          <FormField
-            label="Evaluation period"
-            hint="Existing assignments in this period are skipped automatically."
-          >
+          <FormField label="Evaluation period">
             <select
               required
               value={bulkPeriodId}
@@ -649,165 +1384,184 @@ export default function AdminAssignmentsPage() {
               className={inputCls}
             >
               <option value="">Select period</option>
-              {assignablePeriods.map((period) => (
-                <option key={period.id} value={period.id}>{period.name}</option>
+
+              {periods.map((period) => (
+                <option key={period.id} value={period.id}>
+                  {period.name}
+                  {period.status ? ` (${period.status})` : ""}
+                </option>
               ))}
             </select>
           </FormField>
 
-          <div className="overflow-hidden rounded-lg border border-slate-200 dark:border-slate-800">
-            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 px-3 py-2.5 dark:border-slate-800">
-              <div>
-                <p className="text-sm font-semibold text-slate-900 dark:text-white">Teachers</p>
-                <p className="text-xs text-slate-500">
-                  {selectedBulkRows.length} of {bulkRows.filter((row) => row.available).length} available selected
-                </p>
-              </div>
-              <div className="flex items-center gap-1">
+          <div className="overflow-hidden rounded-xl border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900">
+            <div className="flex items-center justify-between gap-3 border-b border-slate-200 bg-slate-50 px-3 py-3 dark:border-slate-800 dark:bg-slate-800/80">
+              <p className="text-sm font-semibold text-slate-900 dark:text-white">
+                Teachers ({selectedBulkRows.length} selected)
+              </p>
+
+              <div className="flex gap-2">
                 <button
                   type="button"
-                  onClick={() => setBulkTeacherIds(new Set(
-                    bulkRows.filter((row) => row.available).map((row) => row.teacher.id)
-                  ))}
-                  disabled={!bulkPeriodId || !bulkRows.some((row) => row.available)}
-                  className="rounded-md px-2 py-1 text-xs font-semibold text-brand-700 hover:bg-brand-50 disabled:cursor-not-allowed disabled:opacity-50 dark:text-brand-300 dark:hover:bg-brand-500/10"
+                  disabled={!bulkPeriodId}
+                  onClick={() =>
+                    setBulkTeacherIds(
+                      new Set(
+                        bulkRows
+                          .filter((row) => row.available)
+                          .map((row) => row.teacher.id)
+                      )
+                    )
+                  }
+                  className="text-xs font-semibold text-sky-600 disabled:opacity-50 dark:text-sky-400"
                 >
                   Select all
                 </button>
+
                 <button
                   type="button"
                   onClick={() => setBulkTeacherIds(new Set())}
-                  disabled={bulkTeacherIds.size === 0}
-                  className="rounded-md px-2 py-1 text-xs font-semibold text-slate-600 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50 dark:text-slate-300 dark:hover:bg-slate-800"
+                  className="text-xs font-semibold text-slate-600 dark:text-slate-300"
                 >
                   Clear
                 </button>
               </div>
             </div>
 
-            <div className="max-h-[48dvh] divide-y divide-slate-100 overflow-y-auto dark:divide-slate-800">
-              {bulkRows.length === 0 && (
-                <p className="px-4 py-8 text-center text-sm text-slate-500">
-                  No active teachers are available.
-                </p>
-              )}
-              {bulkRows.map((row) => {
-                const checked = row.available && bulkTeacherIds.has(row.teacher.id);
-                return (
-                  <div
-                    key={row.teacher.id}
-                    className={`grid gap-3 px-3 py-3 sm:grid-cols-[auto_minmax(0,1fr)_minmax(12rem,1fr)_7rem] sm:items-center ${
-                      checked ? "bg-brand-50/70 dark:bg-brand-500/5" : ""
-                    }`}
-                  >
-                    <input
-                      type="checkbox"
-                      checked={checked}
-                      disabled={!row.available}
-                      onChange={(event) => {
-                        setBulkTeacherIds((current) => {
-                          const next = new Set(current);
-                          if (event.target.checked) next.add(row.teacher.id);
-                          else next.delete(row.teacher.id);
-                          return next;
-                        });
-                      }}
-                      aria-label={`Select ${row.teacher.displayName}`}
-                      className="h-4 w-4 rounded border-slate-300 text-brand-600 disabled:cursor-not-allowed disabled:opacity-40"
-                    />
+            <div className="max-h-[45vh] divide-y divide-slate-200 overflow-y-auto dark:divide-slate-800">
+              {bulkRows.map((row) => (
+                <div
+                  key={row.teacher.id}
+                  className="grid gap-3 px-3 py-3 sm:grid-cols-[auto_minmax(0,1fr)_minmax(10rem,1fr)_7rem]"
+                >
+                  <input
+                    type="checkbox"
+                    checked={
+                      row.available &&
+                      bulkTeacherIds.has(row.teacher.id)
+                    }
+                    disabled={!row.available}
+                    onChange={(event) => {
+                      setBulkTeacherIds((current) => {
+                        const next = new Set(current);
 
-                    <div className="min-w-0">
-                      <p className="truncate text-sm font-medium text-slate-900 dark:text-white">
-                        {row.teacher.displayName}
-                      </p>
-                      <p className="truncate text-xs text-slate-500">
-                        {depts.find((department) => department.id === row.teacher.departmentId)?.name ?? "Department unavailable"}
-                      </p>
-                    </div>
-
-                    <select
-                      value={row.subjectId}
-                      disabled={row.subjects.length === 0 || row.duplicate}
-                      onChange={(event) => {
-                        const subjectId = event.target.value;
-                        setBulkSubjectIds((current) => ({
-                          ...current,
-                          [row.teacher.id]: subjectId,
-                        }));
-                        if (suggestedStudentIds(row.teacher.id, subjectId).length === 0) {
-                          setBulkTeacherIds((current) => {
-                            const next = new Set(current);
-                            next.delete(row.teacher.id);
-                            return next;
-                          });
+                        if (event.target.checked) {
+                          next.add(row.teacher.id);
+                        } else {
+                          next.delete(row.teacher.id);
                         }
-                      }}
-                      aria-label={`Subject for ${row.teacher.displayName}`}
-                      className={`${inputCls} min-w-0 py-2 text-xs`}
-                    >
-                      {row.subjects.length === 0 ? (
-                        <option value="">No subject</option>
-                      ) : (
-                        <>
-                          {row.subjects.length > 1 && <option value="">Select subject</option>}
-                          {row.subjects.map((subject) => (
-                            <option key={subject.id} value={subject.id}>
-                              {formatSubjectLabel(subject)}
-                            </option>
-                          ))}
-                        </>
-                      )}
-                    </select>
 
-                    <div className="sm:text-right">
-                      {row.available ? (
-                        <span className="text-xs font-semibold text-emerald-700 dark:text-emerald-400">
-                          {row.studentIds.length} student{row.studentIds.length === 1 ? "" : "s"}
-                        </span>
-                      ) : (
-                        <span className={`text-xs font-semibold ${
-                          row.duplicate
-                            ? "text-amber-700 dark:text-amber-400"
-                            : "text-slate-500"
-                        }`}>
-                          {row.unavailableReason}
-                        </span>
-                      )}
-                    </div>
+                        return next;
+                      });
+                    }}
+                    className="mt-2 h-4 w-4"
+                  />
+
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-medium text-slate-900 dark:text-white">
+                      {row.teacher.displayName}
+                    </p>
+
+                    <p className="text-xs text-slate-500 dark:text-slate-400">
+                      {depts.find(
+                        (item) =>
+                          item.id === row.teacher.departmentId
+                      )?.name ?? "Department unavailable"}
+                    </p>
+
+                    {!row.available && (
+                      <p className="text-xs text-amber-600 dark:text-amber-400">
+                        {row.duplicate
+                          ? "Already assigned"
+                          : !row.subjects.length
+                            ? "No assigned subject"
+                            : "Select a period and subject"}
+                      </p>
+                    )}
                   </div>
-                );
-              })}
+
+                  <select
+                    value={row.subjectId}
+                    disabled={!row.subjects.length || row.duplicate}
+                    onChange={(event) =>
+                      setBulkSubjectIds((current) => ({
+                        ...current,
+                        [row.teacher.id]: event.target.value,
+                      }))
+                    }
+                    className={inputCls}
+                  >
+                    <option value="">Select subject</option>
+
+                    {row.subjects.map((subject) => (
+                      <option key={subject.id} value={subject.id}>
+                        {formatSubjectLabel(subject)}
+                      </option>
+                    ))}
+                  </select>
+
+                  <input
+                    type="number"
+                    min={1}
+                    required
+                    value={row.count}
+                    disabled={row.duplicate}
+                    aria-label={`Expected students for ${row.teacher.displayName}`}
+                    onChange={(event) =>
+                      setBulkExpectedCounts((current) => ({
+                        ...current,
+                        [row.teacher.id]: Math.max(
+                          1,
+                          Math.floor(Number(event.target.value) || 1)
+                        ),
+                      }))
+                    }
+                    className={inputCls}
+                  />
+                </div>
+              ))}
             </div>
           </div>
 
-          <div className="sticky bottom-0 -mx-6 flex flex-wrap items-center justify-between gap-3 border-t border-slate-200 bg-white px-6 py-4 dark:border-slate-800 dark:bg-slate-900">
-            <p className="text-xs text-slate-500">
-              <span className="font-semibold text-slate-900 dark:text-white">{selectedBulkRows.length}</span> assignments
-              <span className="mx-2">|</span>
-              <span className="font-semibold text-slate-900 dark:text-white">{bulkStudentLinks}</span> student evaluation tasks
-            </p>
-            <div className="flex items-center gap-2">
-              <button
-                type="button"
-                onClick={() => setBulkOpen(false)}
-                disabled={bulkLoading}
-                className="btn-secondary"
-              >
-                Cancel
-              </button>
-              <button
-                type="submit"
-                disabled={bulkLoading || selectedBulkRows.length === 0}
-                className="btn-primary disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                {bulkLoading ? "Creating..." : `Create ${selectedBulkRows.length} assignments`}
-              </button>
-            </div>
+          <p className="text-xs text-slate-500 dark:text-slate-400">
+            The number field sets the expected student count. It defaults to the student count specified in each teacher&apos;s profile.
+          </p>
+
+          <div className="flex justify-end gap-2">
+            <button
+              type="button"
+              onClick={() => setBulkOpen(false)}
+              disabled={bulkLoading}
+              className="btn-secondary"
+            >
+              Cancel
+            </button>
+
+            <button
+              type="submit"
+              disabled={bulkLoading || selectedBulkRows.length === 0}
+              className="btn-primary disabled:opacity-50"
+            >
+              {bulkLoading
+                ? "Creating..."
+                : `Create ${selectedBulkRows.length} assignment(s)`}
+            </button>
           </div>
         </form>
       </Modal>
 
-      <Modal open={open} onClose={() => setOpen(false)} title={editingAssignment ? "Edit teacher assignment" : "New teacher assignment"} size="lg">
+      {/* CREATE / EDIT ASSIGNMENT MODAL */}
+
+      <Modal
+        open={open}
+        onClose={() => !loading && setOpen(false)}
+        title={
+          editingAssignment
+            ? "Edit teacher assignment"
+            : "New teacher assignment"
+        }
+        size="lg"
+      >
         <form onSubmit={onSave} className="space-y-4">
           <FormField label="Teacher">
             <select
@@ -816,131 +1570,315 @@ export default function AdminAssignmentsPage() {
               value={form.teacherId}
               onChange={(event) => {
                 const teacherId = event.target.value;
-                const teacher = teachers.find((item) => item.id === teacherId);
+                const teacher = teachers.find(
+                  (item) => item.id === teacherId
+                );
                 const subjectId = defaultSubjectId(teacher);
-                setForm({
-                  ...form,
+                const ids = eligibleStudents(
+                  teacherId,
+                  subjectId
+                ).map((student) => student.uid);
+
+                const teacherExpected = Number((teacher as Teacher & { expectedStudents?: number })?.expectedStudents);
+                const autoCount = teacherExpected > 0 ? teacherExpected : Math.max(ids.length, 1);
+
+                setForm((current) => ({
+                  ...current,
                   teacherId,
                   subjectId,
-                  studentIds: suggestedStudentIds(teacherId, subjectId),
-                });
+                  studentIds: ids,
+                  expectedStudentCount: autoCount,
+                }));
               }}
               className={inputCls}
             >
               <option value="">Select teacher</option>
-              {teachers.filter((teacher) => teacher.status !== "inactive").map((t) => (
-                <option key={t.id} value={t.id}>{t.displayName}</option>
-              ))}
+
+              {teachers
+                .filter((teacher) => teacher.status !== "inactive")
+                .map((teacher) => (
+                  <option key={teacher.id} value={teacher.id}>
+                    {teacher.displayName}
+                  </option>
+                ))}
             </select>
           </FormField>
-          <FormField
-            label="Subject"
-            hint={editingAssignment && completedStudentIds.size > 0
-              ? "Changing this subject also corrects the linked response and completion records."
-              : undefined}
-          >
+
+          <FormField label="Subject">
             <select
               required
               value={form.subjectId}
               onChange={(event) => {
                 const subjectId = event.target.value;
-                setForm({
-                  ...form,
+                const ids = eligibleStudents(
+                  form.teacherId,
+                  subjectId
+                ).map((student) => student.uid);
+
+                setForm((current) => ({
+                  ...current,
                   subjectId,
-                  studentIds: suggestedStudentIds(form.teacherId, subjectId),
-                });
+                  studentIds: [
+                    ...new Set([
+                      ...ids,
+                      ...completedStudentIds,
+                    ]),
+                  ],
+                  expectedStudentCount: Math.max(
+                    current.expectedStudentCount,
+                    ids.length,
+                    completedStudentIds.size,
+                    1
+                  ),
+                }));
               }}
               className={inputCls}
             >
               <option value="">Select subject</option>
-              {eligibleSubjects.map((s) => (
-                <option key={s.id} value={s.id}>{formatSubjectLabel(s)}</option>
+
+              {eligibleSubjects.map((subject) => (
+                <option key={subject.id} value={subject.id}>
+                  {formatSubjectLabel(subject)}
+                </option>
               ))}
             </select>
           </FormField>
-          <FormField label="Period">
-            <select required disabled={Boolean(editingAssignment)} value={form.periodId} onChange={(e) => setForm({ ...form, periodId: e.target.value })} className={inputCls}>
-              <option value="">Select period</option>
-              {assignablePeriods.map((p) => (
-                <option key={p.id} value={p.id}>{p.name}</option>
+
+          {!editingAssignment && (
+            <FormField
+              label="Expected Number of Students"
+              hint="Prefilled automatically from the teacher's profile. You can modify it if needed."
+            >
+              <input
+                type="number"
+                min={1}
+                required
+                value={form.expectedStudentCount}
+                onChange={(event) => {
+                  const value = Math.max(
+                    1,
+                    Math.floor(Number(event.target.value) || 1)
+                  );
+
+                  setForm((current) => ({
+                    ...current,
+                    expectedStudentCount: value,
+                  }));
+                }}
+                className={inputCls}
+              />
+            </FormField>
+          )}
+
+          <FormField label="Evaluation Period">
+            <select
+              required
+              disabled={Boolean(editingAssignment)}
+              value={form.periodId}
+              onChange={(event) =>
+                setForm((current) => ({
+                  ...current,
+                  periodId: event.target.value,
+                }))
+              }
+              className={inputCls}
+            >
+              <option value="">Select evaluation period</option>
+
+              {periods.map((period) => (
+                <option key={period.id} value={period.id}>
+                  {period.name}
+                  {period.status ? ` — ${period.status}` : ""}
+                </option>
               ))}
             </select>
           </FormField>
+
           <FormField
-            label="Students"
-            hint={`${form.studentIds.length} of ${scopedStudents.length} eligible students selected`}
+            label="Registered Students"
+            hint={`${form.studentIds.length} registered student account(s) linked to this assignment. Students without accounts are counted in the expected total but cannot be listed by name.`}
           >
-            <div className="overflow-hidden rounded-lg border border-slate-200 dark:border-slate-800">
-              <div className="flex items-center justify-between gap-3 border-b border-slate-200 px-3 py-2 dark:border-slate-800">
-                <p className="text-xs text-slate-500">
-                  Only students matching the teacher&apos;s Program, year, section, and department scope are available.
+            <div className="overflow-hidden rounded-xl border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900">
+              <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 bg-slate-50 px-3 py-2 dark:border-slate-800 dark:bg-slate-800/80">
+                <p className="text-xs text-slate-500 dark:text-slate-400">
+                  Select registered student accounts
                 </p>
-                <div className="flex shrink-0 items-center gap-1">
+
+                <div className="flex gap-3">
                   <button
                     type="button"
-                    onClick={() => setForm({
-                      ...form,
-                      studentIds: scopedStudents.map((student) => student.uid),
-                    })}
-                    className="rounded-md px-2 py-1 text-xs font-semibold text-brand-700 hover:bg-brand-50 dark:text-brand-300 dark:hover:bg-brand-500/10"
+                    onClick={() =>
+                      setForm((current) => ({
+                        ...current,
+                        studentIds: [
+                          ...new Set([
+                            ...scopedStudents.map(
+                              (student) => student.uid
+                            ),
+                            ...completedStudentIds,
+                          ]),
+                        ],
+                      }))
+                    }
+                    className="text-xs font-semibold text-sky-600 dark:text-sky-300"
                   >
                     Select all
                   </button>
+
                   <button
                     type="button"
-                    onClick={() => setForm({ ...form, studentIds: [] })}
-                    className="rounded-md px-2 py-1 text-xs font-semibold text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800"
+                    onClick={() =>
+                      setForm((current) => ({
+                        ...current,
+                        studentIds: Array.from(completedStudentIds),
+                      }))
+                    }
+                    className="text-xs font-semibold text-slate-600 dark:text-slate-300"
                   >
                     Clear
                   </button>
                 </div>
               </div>
-              <div className="max-h-56 divide-y divide-slate-100 overflow-y-auto dark:divide-slate-800">
-                {scopedStudents.length === 0 && (
-                  <p className="px-3 py-5 text-center text-sm text-slate-500">
-                    No active students match this teacher and subject scope.
+
+              <div className="max-h-56 divide-y divide-slate-200 overflow-y-auto dark:divide-slate-800">
+                {scopedStudents.length === 0 ? (
+                  <p className="px-3 py-6 text-center text-sm text-slate-500 dark:text-slate-400">
+                    No registered students match this teacher and subject.
+                    You can still enter the expected student count above.
                   </p>
+                ) : (
+                  scopedStudents.map((student) => {
+                    const program = programs.find(
+                      (item) => item.id === student.programId
+                    );
+
+                    const details = [
+                      program?.code ?? student.course,
+                      student.yearLevel
+                        ? `Year ${student.yearLevel}`
+                        : "",
+                      student.section
+                        ? `Section ${student.section}`
+                        : "",
+                    ]
+                      .filter(Boolean)
+                      .join(" / ");
+
+                    const checked = form.studentIds.includes(student.uid);
+                    const completed = completedStudentIds.has(student.uid);
+
+                    return (
+                      <label
+                        key={student.uid}
+                        className="flex cursor-pointer items-start gap-3 px-3 py-2.5 transition-colors hover:bg-slate-50 dark:hover:bg-slate-800"
+                      >
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          onChange={(event) => {
+                            setForm((current) => ({
+                              ...current,
+                              studentIds: event.target.checked
+                                ? [
+                                    ...new Set([
+                                      ...current.studentIds,
+                                      student.uid,
+                                    ]),
+                                  ]
+                                : completed
+                                  ? current.studentIds
+                                  : current.studentIds.filter(
+                                      (id) => id !== student.uid
+                                    ),
+                            }));
+
+                            if (!event.target.checked && completed) {
+                              toast.error(
+                                "A student who has completed an evaluation cannot be removed."
+                              );
+                            }
+                          }}
+                          className="mt-1 h-4 w-4"
+                        />
+
+                        <span className="min-w-0 flex-1">
+                          <span className="block text-sm font-medium text-slate-900 dark:text-white">
+                            {student.displayName || student.email}
+                          </span>
+
+                          <span className="block text-xs text-slate-500 dark:text-slate-400">
+                            {student.email && student.displayName
+                              ? `${student.email} / `
+                              : ""}
+                            {details || "No academic details"}
+                          </span>
+                        </span>
+
+                        {completed && (
+                          <span className="text-xs font-semibold text-emerald-600 dark:text-emerald-400">
+                            Completed
+                          </span>
+                        )}
+                      </label>
+                    );
+                  })
                 )}
-                {scopedStudents.map((student) => {
-                  const details = [
-                    programs.find((program) => program.id === student.programId)?.code
-                      ?? student.course,
-                    student.yearLevel ? `Year ${student.yearLevel}` : "",
-                    student.section ? `Section ${student.section}` : "",
-                  ].filter(Boolean).join(" / ");
-                  return (
-                    <label
-                      key={student.uid}
-                      className="flex cursor-pointer items-start gap-3 px-3 py-2.5 hover:bg-slate-50 dark:hover:bg-slate-800/50"
-                    >
-                      <input
-                        type="checkbox"
-                        checked={form.studentIds.includes(student.uid)}
-                        onChange={(event) => {
-                          const studentIds = event.target.checked
-                            ? [...form.studentIds, student.uid]
-                            : form.studentIds.filter((studentId) => studentId !== student.uid);
-                          setForm({ ...form, studentIds });
-                        }}
-                        className="mt-0.5 h-4 w-4 rounded border-slate-300 text-brand-600"
-                      />
-                      <span className="min-w-0">
-                        <span className="block text-sm font-medium text-slate-900 dark:text-white">
-                          {student.displayName || student.email}
-                        </span>
-                        <span className="block text-xs text-slate-500">
-                          {details || "No academic details"}
-                        </span>
-                      </span>
-                    </label>
-                  );
-                })}
               </div>
             </div>
           </FormField>
+
+          <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 dark:border-slate-800 dark:bg-slate-800/70">
+            <p className="text-xs text-slate-500 dark:text-slate-400">
+              Live evaluation summary
+            </p>
+
+            <div className="mt-2 flex flex-wrap gap-2 text-xs">
+              <span className="rounded-md border border-emerald-500/20 bg-emerald-500/10 px-2 py-1 font-semibold text-emerald-700 dark:text-emerald-400">
+                Completed:{" "}
+                {editingAssignment ? completedStudentIds.size : 0}/
+                {Math.max(
+                  form.expectedStudentCount,
+                  form.studentIds.length,
+                  completedStudentIds.size
+                )}
+              </span>
+
+              <span className="rounded-md border border-amber-500/20 bg-amber-500/10 px-2 py-1 font-semibold text-amber-700 dark:text-amber-400">
+                Pending:{" "}
+                {Math.max(
+                  Math.max(
+                    form.expectedStudentCount,
+                    form.studentIds.length,
+                    completedStudentIds.size
+                  ) -
+                    (editingAssignment ? completedStudentIds.size : 0),
+                  0
+                )}
+              </span>
+            </div>
+          </div>
+
           <div className="flex justify-end gap-2 pt-2">
-            <button type="button" onClick={() => setOpen(false)} className="btn-secondary">Cancel</button>
-            <button type="submit" disabled={loading} className="btn-primary">{loading ? "Saving..." : editingAssignment ? "Save changes" : "Save"}</button>
+            <button
+              type="button"
+              onClick={() => setOpen(false)}
+              disabled={loading}
+              className="btn-secondary"
+            >
+              Cancel
+            </button>
+
+            <button
+              type="submit"
+              disabled={loading}
+              className="btn-primary disabled:opacity-50"
+            >
+              {loading
+                ? "Saving..."
+                : editingAssignment
+                  ? "Save changes"
+                  : "Save assignment"}
+            </button>
           </div>
         </form>
       </Modal>
@@ -954,19 +1892,20 @@ function ProgressSummary({
   tone,
 }: {
   label: string;
-  value: number;
+  value: string | number;
   tone: "neutral" | "complete" | "pending";
 }) {
-  const colors = {
-    neutral: "text-slate-950 dark:text-white",
-    complete: "text-emerald-600 dark:text-emerald-400",
-    pending: "text-amber-600 dark:text-amber-400",
-  };
+  const color =
+    tone === "complete"
+      ? "text-emerald-600 dark:text-emerald-400"
+      : tone === "pending"
+        ? "text-amber-600 dark:text-amber-400"
+        : "text-slate-900 dark:text-white";
 
   return (
-    <div className="rounded-lg border border-slate-200 px-3 py-2.5 dark:border-slate-800">
-      <p className="text-xs text-slate-500">{label}</p>
-      <p className={`mt-1 text-xl font-bold ${colors[tone]}`}>{value}</p>
+    <div className="rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900">
+      <p className="text-xs text-slate-500 dark:text-slate-400">{label}</p>
+      <p className={`mt-1 text-xl font-bold ${color}`}>{value}</p>
     </div>
   );
 }

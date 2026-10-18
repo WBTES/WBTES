@@ -3,13 +3,15 @@
 import * as React from "react";
 import {
   CircleAlert,
+  FileDown,
+  FileSpreadsheet,
   FileText,
   Filter,
   LockKeyhole,
   RefreshCw,
   ShieldCheck,
 } from "lucide-react";
-import { collection, doc, getDoc, getDocs, query, where } from "firebase/firestore";
+import { collection, getDocs } from "firebase/firestore";
 import { db, firebaseReady } from "@/lib/firebase/client";
 import { useAuth } from "@/lib/firebase/auth-context";
 import { PageHeader, FormField, inputCls } from "@/components/data-table";
@@ -198,9 +200,12 @@ export default function HrReportsPage() {
     }
     setBusy(true);
     try {
-      if (kind === "pdf") exportTeacherEvaluationReportPDF(reportData);
-      else exportTeacherEvaluationReportExcel(reportData);
-      toast.success(kind === "pdf" ? "PDF report downloaded" : "Excel report exported");
+      if (kind === "pdf") {
+        exportTeacherEvaluationReportPDF(reportData);
+      } else {
+        exportTeacherEvaluationReportExcel(reportData);
+      }
+      toast.success(kind === "pdf" ? "PDF report downloaded successfully" : "Excel report exported successfully");
     } catch (exportError) {
       toast.error(exportError instanceof Error ? exportError.message : "Report export failed.");
     } finally {
@@ -212,7 +217,7 @@ export default function HrReportsPage() {
     <div>
       <PageHeader
         title="Teacher Evaluation Reports"
-        description="Build confidential reports from released anonymous results."
+        description="Build confidential professional reports from released anonymous results."
       />
 
       <SchoolwideAnalytics />
