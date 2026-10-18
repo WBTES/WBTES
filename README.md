@@ -1,18 +1,21 @@
 # WBTE: Web-Based Teacher Evaluation
 
-WBTE is a role-based teacher evaluation application for students, HR, and administrators. Teachers are evaluation records only; there are no teacher login accounts.
+WBTE is a role-based teacher evaluation application for students, HR, department heads, and administrators. Teachers are evaluation records only; there are no teacher login accounts.
 
 ## Implemented Workflows
 
 ### Authentication and roles
 
-- Students submit their own name, school email, student number, Program, year level, section, and password from the public Create account page.
+- Students submit their own name, contact email, unique School ID, Program, year level, section, and password from the public Create account page. Contact emails may be shared by multiple students.
 - Every new student account becomes active immediately and opens the student dashboard after registration; no administrator approval or email verification is required.
-- Existing Google identities are safely linked to the submitted student registration instead of duplicated.
+- Students sign in with School ID and password; Google sign-in is not used to select student accounts. Firebase stores passwords using a unique internal login address, while the contact email stays in the student profile.
+- Existing students keep their UID, password, assignments, and completion history. Their Firebase login address is migrated after a successful School ID/password sign-in; staff login and verification remain unchanged.
+- Google-only legacy students need an administrator-issued password first. Google links are removed when migrating a student's login or resetting their password, so a shared Google inbox cannot select an existing student account.
+- Student password recovery is administrator-assisted from Users > Student profile > Reset password. Students can change the reset password from their own profile. Shared contact inboxes are not used for recovery.
 - Administrators can review and correct student academic information without controlling account activation.
 - Administrators create administrator and HR accounts with usernames and temporary passwords. The HR role keeps the internal value `department_head` for compatibility.
 - Email verification, disabled-account enforcement, secure logout, login audit records, in-app login alerts, and optional SMTP login emails are included.
-- Firestore rules recognize only `admin`, `department_head`, and `student`.
+- Firestore rules recognize `admin`, `hr`, `department_head`, and `student`.
 
 ### Evaluation cycle
 

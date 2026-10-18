@@ -18,9 +18,11 @@ export async function authenticatedFetch(
 }
 
 export async function readApiResponse<T>(response: Response): Promise<T> {
-  const data = await response.json() as T & { error?: string };
+  const data = await response.json() as T & { error?: string; code?: string };
   if (!response.ok) {
-    throw new Error(data.error ?? "The request could not be completed.");
+    throw Object.assign(new Error(data.error ?? "The request could not be completed."), {
+      code: data.code,
+    });
   }
   return data;
 }

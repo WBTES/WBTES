@@ -4,6 +4,7 @@ import * as React from "react";
 import {
   Building2,
   Eye,
+  KeyRound,
   Mail,
   Power,
   Search,
@@ -100,6 +101,7 @@ export default function AdminUsersPage() {
   const [studentOpen, setStudentOpen] = React.useState(false);
   const [staffOpen, setStaffOpen] = React.useState(false);
   const [profileStudent, setProfileStudent] = React.useState<ManagedStudent | null>(null);
+  const [passwordStudent, setPasswordStudent] = React.useState<ManagedStudent | null>(null);
   const [editingStudent, setEditingStudent] = React.useState<ManagedStudent | null>(null);
   const [editingStaff, setEditingStaff] = React.useState<AppUser | null>(null);
   const [studentForm, setStudentForm] = React.useState<StudentForm>(emptyStudent);
@@ -252,7 +254,7 @@ export default function AdminUsersPage() {
   };
 
   const deleteStudent = async (student: ManagedStudent) => {
-    if (!confirm(`Delete ${student.displayName}'s registration and login account? Anonymous responses will remain.`)) return;
+    if (!confirm(`Delete ${student.displayName}'s registration and login account? Anonymous responses will remain. The School ID cannot be registered again; contact emails may be shared.`)) return;
     try {
       const response = await authenticatedFetch(
         `/api/admin/students?id=${encodeURIComponent(student.id)}`,
@@ -484,7 +486,9 @@ export default function AdminUsersPage() {
         program={programs.find((item) => item.id === profileStudent?.programId)}
         department={departments.find((item) => item.id === profileStudent?.departmentId)}
         onClose={() => setProfileStudent(null)}
+        onResetPassword={(student) => { setProfileStudent(null); setPasswordStudent(student); }}
       />
+      <StudentPasswordModal student={passwordStudent} onClose={() => setPasswordStudent(null)} />
     </div>
   );
 }
@@ -674,12 +678,12 @@ function StudentModal({
           <FormField label="Full name">
             <input required value={form.displayName} onChange={(event) => setForm({ ...form, displayName: event.target.value })} className={inputCls} />
           </FormField>
-          <FormField label="Student number">
-            <input value={form.studentNumber} onChange={(event) => setForm({ ...form, studentNumber: event.target.value })} className={inputCls} />
+          <FormField label="School ID">
+            <input required={Boolean(editing?.studentNumber)} maxLength={100} value={form.studentNumber} onChange={(event) => setForm({ ...form, studentNumber: event.target.value })} className={inputCls} />
           </FormField>
         </div>
-        <FormField label="Registered school email" hint="Email cannot be changed after registration.">
-          <input required type="email" disabled value={form.email} onChange={(event) => setForm({ ...form, email: event.target.value })} className={inputCls} />
+        <FormField label="Contact email" hint="Contact emails may be shared by different students.">
+          <input required type="email" maxLength={254} value={form.email} onChange={(event) => setForm({ ...form, email: event.target.value })} className={inputCls} />
         </FormField>
         <div className="grid gap-4 sm:grid-cols-3">
           <FormField label="Program">
@@ -782,11 +786,13 @@ function StudentProfileModal({
   program,
   department,
   onClose,
+  onResetPassword,
 }: {
   student: ManagedStudent | null;
   program?: Program;
   department?: Department;
   onClose: () => void;
+  onResetPassword: (student: ManagedStudent) => void;
 }) {
   const [progress, setProgress] = React.useState({
     assigned: 0,
@@ -829,8 +835,8 @@ function StudentProfileModal({
         <div className="space-y-5">
           <div className="grid gap-4 sm:grid-cols-2">
             <ProfileItem label="Student" value={student.displayName} />
-            <ProfileItem label="School email" value={student.email} />
-            <ProfileItem label="Student number" value={student.studentNumber || "Not provided"} />
+            <ProfileItem label="Contact email" value={student.email} />
+            <ProfileItem label="School ID" value={student.studentNumber || "Not provided"} />
             <ProfileItem label="Program" value={program ? `${program.code} - ${program.name}` : student.course} />
             <ProfileItem label="Department" value={department?.name ?? "Not assigned"} />
             <ProfileItem label="Year and section" value={`${student.yearLevel} year / ${student.section}`} />
@@ -842,10 +848,45 @@ function StudentProfileModal({
             <ProfileItem label="Completed" value={progress.loading ? "..." : String(progress.completed)} />
             <ProfileItem label="Last submission" value={progress.loading ? "..." : progress.lastSubmittedAt ? fmtDateTime(progress.lastSubmittedAt) : "None"} />
           </div>
+          {student.accountCreated && !student.orphaned && student.status !== "disabled" && <div className="flex justify-end">
+            <button type="button" className="btn-secondary" onClick={() => onResetPassword(student)}><KeyRound className="h-4 w-4" />Reset password</button>
+          </div>}
         </div>
       )}
     </Modal>
   );
+}
+
+function StudentPasswordModal({ student, onClose }: { student: ManagedStudent | null; onClose: () => void }) {
+  const [password, setPassword] = React.useState("");
+  const [confirmation, setConfirmation] = React.useState("");
+  const [saving, setSaving] = React.useState(false);
+  React.useEffect(() => { setPassword(""); setConfirmation(""); }, [student?.id]);
+  const submit = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!student) return;
+    if (password !== confirmation) { toast.error("Password confirmation does not match."); return; }
+    setSaving(true);
+    try {
+      const response = await authenticatedFetch("/api/admin/students/password", {
+        method: "POST", body: JSON.stringify({ id: student.id, password }),
+      });
+      await readApiResponse(response);
+      toast.success("Student password reset");
+      setPassword(""); setConfirmation(""); onClose();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Password reset failed.");
+    } finally { setSaving(false); }
+  };
+  return <Modal open={Boolean(student)} onClose={() => { if (!saving) onClose(); }} title="Reset student password">
+    <form onSubmit={submit} className="space-y-4">
+      <p className="text-sm font-medium">{student?.displayName} / School ID: {student?.studentNumber || "Not provided"}</p>
+      <p className="text-xs text-slate-500">Confirm the student&apos;s identity before sharing the new password privately. No reset link will be sent to the shared contact email.</p>
+      <FormField label="New password"><input type="password" autoComplete="new-password" required minLength={8} maxLength={128} value={password} onChange={(event) => setPassword(event.target.value)} className={inputCls} /></FormField>
+      <FormField label="Confirm new password"><input type="password" autoComplete="new-password" required minLength={8} maxLength={128} value={confirmation} onChange={(event) => setConfirmation(event.target.value)} className={inputCls} /></FormField>
+      <div className="flex justify-end gap-2"><button type="button" disabled={saving} className="btn-secondary" onClick={onClose}>Cancel</button><button type="submit" disabled={saving} className="btn-primary"><KeyRound className="h-4 w-4" />{saving ? "Resetting..." : "Reset password"}</button></div>
+    </form>
+  </Modal>;
 }
 
 function ProfileItem({ label, value }: { label: string; value: string }) {

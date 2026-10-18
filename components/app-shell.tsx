@@ -50,6 +50,7 @@ import {
   requestAdminNavigationRefresh,
 } from "@/lib/admin-navigation";
 import { BrandMark } from "@/components/brand-mark";
+import { FIRESTORE_QUOTA_MESSAGE, isFirestoreQuotaError } from "@/lib/firebase/firestore-error";
 
 type NavItem = {
   href: string;
@@ -107,6 +108,9 @@ type NavIndicator = {
 export function AppShell({ children }: { children: React.ReactNode }) {
   const { user, profile, loading, configured, signOut } = useAuth();
   const userId = user?.uid;
+  const role = profile?.role;
+  const accountStatus = profile?.status;
+  const quotaPaused = React.useRef(false);
   const pathname = usePathname();
   const router = useRouter();
   const { resolvedTheme, setTheme } = useTheme();
@@ -144,6 +148,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
   React.useEffect(() => setMounted(true), []);
 
+  React.useEffect(() => { quotaPaused.current = false; }, [userId]);
+
   // Guard
   React.useEffect(() => {
     if (loading) return;
@@ -166,7 +172,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     let inFlight = false;
     let lastLoadedAt = 0;
     const loadStatus = async () => {
-      if (inFlight || Date.now() - lastLoadedAt < 2_000) return;
+      if (!active || quotaPaused.current || document.visibilityState === "hidden"
+        || inFlight || Date.now() - lastLoadedAt < 2_000) return;
       inFlight = true;
       try {
         const response = await authenticatedFetch(
@@ -179,6 +186,10 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         }
       } catch (error) {
         if (active) {
+          if (isFirestoreQuotaError(error)) {
+            quotaPaused.current = true;
+            toast.error(FIRESTORE_QUOTA_MESSAGE, { id: "firestore-quota" });
+          }
           console.warn(
             "Admin navigation status could not be refreshed:",
             error
@@ -228,25 +239,39 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
   React.useEffect(() => {
     if (
-      !user
-      || !profile
-      || profile.status === "pending"
-      || profile.status === "disabled"
+      !userId
+      || !role
+      || accountStatus === "pending"
+      || accountStatus === "disabled"
     ) return;
+    let active = true;
+    let inFlight = false;
     const run = async () => {
+      if (!active || inFlight || quotaPaused.current || document.visibilityState === "hidden") return;
+      inFlight = true;
       try {
-        await authenticatedFetch("/api/maintenance/run", { method: "POST" });
-        if (profile.role === "admin") {
+        const response = await authenticatedFetch("/api/maintenance/run", { method: "POST" });
+        await readApiResponse(response);
+        if (active && role === "admin") {
           requestAdminNavigationRefresh();
         }
       } catch (error) {
+        if (active && isFirestoreQuotaError(error)) {
+          quotaPaused.current = true;
+          toast.error(FIRESTORE_QUOTA_MESSAGE, { id: "firestore-quota" });
+        }
         console.warn("Maintenance heartbeat failed:", error);
+      } finally {
+        inFlight = false;
       }
     };
     void run();
     const timer = window.setInterval(run, 60_000);
-    return () => window.clearInterval(timer);
-  }, [profile, user]);
+    return () => {
+      active = false;
+      window.clearInterval(timer);
+    };
+  }, [userId, role, accountStatus]);
 
   const openNotification = async (notification: Notification) => {
     try {

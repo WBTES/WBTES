@@ -2,8 +2,15 @@ import "server-only";
 
 import { NextResponse } from "next/server";
 import { ApiError } from "@/lib/server/require-admin";
+import { FIRESTORE_QUOTA_MESSAGE, isFirestoreQuotaError } from "@/lib/firebase/firestore-error";
 
 export function apiErrorResponse(error: unknown, fallback: string) {
+  if (isFirestoreQuotaError(error)) {
+    return NextResponse.json({
+      error: FIRESTORE_QUOTA_MESSAGE,
+      code: "firestore/resource-exhausted",
+    }, { status: 503 });
+  }
   const status = error instanceof ApiError ? error.status : 500;
   const message = error instanceof Error ? error.message : fallback;
   return NextResponse.json({ error: message }, { status });

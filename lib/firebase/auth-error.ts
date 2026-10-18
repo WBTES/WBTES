@@ -1,4 +1,7 @@
+import { FIRESTORE_QUOTA_MESSAGE, isFirestoreQuotaError } from "./firestore-error";
+
 export function getAuthErrorMessage(error: unknown, fallback: string) {
+  if (isFirestoreQuotaError(error)) return FIRESTORE_QUOTA_MESSAGE;
   const raw = error instanceof Error ? error.message : fallback;
   const message = raw.replace(/^Firebase:\s*/i, "").trim();
 

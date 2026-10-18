@@ -102,6 +102,10 @@ service cloud.firestore {
       allow read, write: if false;
     }
 
+    match /studentIdentities/{identityId} {
+      allow read, write: if false;
+    }
+
     match /departments/{departmentId} {
       allow read: if isAdmin()
         || isStudent()

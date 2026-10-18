@@ -7,6 +7,7 @@ import type { BackupMetadata } from "@/lib/types";
 const BACKUP_COLLECTIONS = [
   "users",
   "studentRegistry",
+  "studentIdentities",
   "teachers",
   "departments",
   "programs",

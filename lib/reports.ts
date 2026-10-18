@@ -8,6 +8,7 @@ import type {
 } from "@/lib/types";
 import { fmtDateTime } from "@/lib/utils-extras";
 import { participationStatus, type ReportParticipation } from "@/lib/report-participation";
+import type { ReportRating } from "@/lib/report-ratings";
 
 type Meta = {
   teacher: string;
@@ -26,6 +27,7 @@ export type EvaluationLookups = {
 type EvaluationExportOptions = {
   participation?: ReportParticipation[];
   partial?: boolean;
+  finalizedRatings?: ReportRating[];
 };
 
 type AdditionalTable = { title: string; headers: string[]; rows: Array<Array<string | number>> };
@@ -51,6 +53,19 @@ function participationTable(participation: ReportParticipation[], lookups: Evalu
     headers: ["Teacher", "Subject", "Department", "Period", "Assigned", "Students evaluated", "Pending", "Status"],
     rows: rows.map((row) => Object.values(row)),
   };
+}
+
+function finalizedRatingRows(ratings: ReportRating[], lookups: EvaluationLookups) {
+  return ratings.map((row) => ({
+    Teacher: lookups.teachers?.[row.teacherId] ?? row.teacherId,
+    Subject: lookups.subjects?.[row.subjectId] ?? row.subjectId,
+    Department: lookups.departments?.[row.departmentId] ?? row.departmentId,
+    Program: lookups.programs?.[row.programId ?? ""] ?? row.course,
+    Year: row.yearLevel,
+    Period: lookups.periods?.[row.periodId] ?? row.periodId,
+    "Finalized responses": row.responses,
+    "Average rating": row.average,
+  }));
 }
 
 export type TeacherEvaluationReportData = {
@@ -106,7 +121,14 @@ export function exportToPDF(
     ],
     columns,
     `WBTE-Evaluation-Report-${Date.now()}.pdf`,
-    options.participation ? [participationTable(options.participation, lookups)] : []
+    [
+      ...(options.participation ? [participationTable(options.participation, lookups)] : []),
+      ...(options.finalizedRatings ? [{
+        title: "Finalized ratings",
+        headers: ["Teacher", "Subject", "Department", "Program", "Year", "Period", "Finalized responses", "Average / 5"],
+        rows: finalizedRatingRows(options.finalizedRatings, lookups).map((row) => [row.Teacher, row.Subject, row.Department, row.Program, row.Year, row.Period, row["Finalized responses"], row["Average rating"].toFixed(2)]),
+      }] : []),
+    ]
   );
 }
 
@@ -143,7 +165,10 @@ export function exportToExcel(
       [options.partial ? "Preliminary average" : "Average"]: evaluations.length ? average(evaluations) : "Not available",
     },
     `WBTE-Evaluation-Report-${Date.now()}.xlsx`,
-    options.participation ? [{ name: "Teacher Participation", rows: participationRows(options.participation, lookups) }] : []
+    [
+      ...(options.participation ? [{ name: "Teacher Participation", rows: participationRows(options.participation, lookups) }] : []),
+      ...(options.finalizedRatings ? [{ name: "Finalized Ratings", rows: finalizedRatingRows(options.finalizedRatings, lookups) }] : []),
+    ]
   );
 }
 

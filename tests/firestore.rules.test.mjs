@@ -42,6 +42,7 @@ async function seedData() {
       ["users/student-unverified", { role: "student", status: "active", departmentId: "dept-a" }],
       ["users/hr-unverified", { role: "hr", status: "active", departmentId: "dept-a" }],
       ["users/head-unverified", { role: "department_head", status: "active", departmentId: "dept-a" }],
+      ["studentIdentities/school_id-private", { registryId: "private-email", claimedUid: "student-a" }],
       ["departments/dept-a", { name: "Department A" }],
       ["departments/dept-b", { name: "Department B" }],
       ["programs/program-a", { name: "Program A", departmentId: "dept-a" }],
@@ -286,5 +287,34 @@ describe("HR Firestore access", () => {
       where("studentId", "==", "student-unverified")
     )));
     assert.equal(completions.size, 0);
+  });
+
+  it("keeps School ID reservations server-only for every role", async () => {
+    for (const [uid, role] of [["admin", "admin"], ["hr-a", "hr"], ["head-a", "department_head"], ["student-a", "student"]]) {
+      const db = authenticatedDb(uid, role);
+      await assertFails(getDoc(doc(db, "studentIdentities", "school_id-private")));
+      await assertFails(getDocs(collection(db, "studentIdentities")));
+      await assertFails(setDoc(doc(db, "studentIdentities", "email-forged"), { claimedUid: uid }));
+      await assertFails(deleteDoc(doc(db, "studentIdentities", "school_id-private")));
+    }
+  });
+
+  it("students sharing a contact email can access only their own UID's records", async () => {
+    await testEnv.withSecurityRulesDisabled(async (context) => {
+      const db = context.firestore();
+      for (const uid of ["student-a", "student-unverified"]) await updateDoc(doc(db, "users", uid), { email: "shared@gmail.com" });
+    });
+    const db = testEnv.authenticatedContext("student-a", { email: "shared@gmail.com", email_verified: true, firebase: { sign_in_provider: "custom" } }).firestore();
+    await assertSucceeds(getDoc(doc(db, "users", "student-a")));
+    await assertFails(getDoc(doc(db, "users", "student-unverified")));
+    await assertSucceeds(getDocs(query(collection(db, "teacherAssignments"), where("studentIds", "array-contains", "student-a"))));
+    await assertFails(getDocs(query(collection(db, "teacherAssignments"), where("studentIds", "array-contains", "student-unverified"))));
+    await assertFails(updateDoc(doc(db, "users", "student-a"), { studentRegistryId: "student_other", studentLogin: "school_id" }));
+  });
+
+  it("Google sign-in cannot bypass the student School ID/password workflow", async () => {
+    const db = testEnv.authenticatedContext("student-a", { email: "shared@gmail.com", email_verified: true, firebase: { sign_in_provider: "google.com" } }).firestore();
+    await assertFails(getDoc(doc(db, "teachers", "teacher-a")));
+    await assertFails(getDocs(query(collection(db, "teacherAssignments"), where("studentIds", "array-contains", "student-a"))));
   });
 });
