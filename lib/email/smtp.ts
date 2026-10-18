@@ -40,6 +40,14 @@ export function isSmtpConfigured() {
   return smtpConfig().configured;
 }
 
+export async function sendSmtpEmail(message: EmailMessage) {
+  const result = await sendSmtpEmails([message]);
+  if (result.sent !== 1) {
+    throw new Error("A valid recipient email address is required.");
+  }
+  return result;
+}
+
 // ==========================================
 // 3. CORE SENDING LOGIC (BATCHED)
 // ==========================================
